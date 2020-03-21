@@ -43,7 +43,6 @@ class HyperParamState:
     if key == 'hpgrid':
       return self._hpgrid.copy()
 
-
 class HyperParams:
   self._attrs = {}
 
@@ -71,8 +70,7 @@ class PTOptimization:
                optimizer,
                noise_list,
                noise_types,
-               compute_proba_fn=None,
-               ):
+               compute_proba_fn=None):
     self.n_replicas = len(noise_list)
     self.models = [keras_model]
     self.models += [tf.keras.models.clone_model(keras_model)
