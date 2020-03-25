@@ -1,8 +1,8 @@
 import tensorflow as tf
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
-from tensorflow.python.keras.engine import training as keras_train
-from tensorflow.python.keras import optimizers as keras_optimizers
 import numpy as np
+
+import pt_train_utils as train_utils
 
 class HyperParams:
   def __init__(self):
@@ -30,13 +30,15 @@ class PTEnsemble:
     self._model_builder_fn = model_builder
     self._is_compiled = False
     self.run_eagerly = False
+    self._exchange_hparams = None
+    self._train_attrs = None
 
   def compile(self,
               optimizer,
               loss,
               exchange_hparams,
               target_tensors=None):
-    
+
     # verify valid `exchange_hparams`
     if not isinstance(exchange_hparams, dict):
       raise ValueError("`exchange_hparams must be an instance of `dict`.")
@@ -63,33 +65,42 @@ class PTEnsemble:
         outputs = model.outputs
         output_names = keras_train_utils.generic_output_names(outputs)
         loss_functions = keras_train_utils.prepare_loss_functions(loss, output_names)
-        target_tensors = model._process_target_tensor_for_compile(target_tensors)
-        training_endpoints = []
-        for o, n, l, t in zip(outputs, output_names,
-                              loss_functions, target_tensors):
-          endpoint = keras_train._TrainingEndpoint(o, n, l)
-          endpoint.create_training_target(t, run_eagerly=self.run_eagerly)
-          training_endpoints.append(endpoint)
 
-        opt = keras_optimizers.get(optimizer)
-        _hyper = {}
-        for n, v in opt._hyper.items():
-          if isinstance(v, float):
-            opt._set_hyper(n, hp.get_hparam(n, default_value=v))
+      opt = tf.keras.optimizers.get(optimizer)
+      _hyper = {}
+      for n, v in opt._hyper.items():
+        if isinstance(v, float):
+          opt._set_hyper(n, hp.get_hparam(n, default_value=v))
 
-        train_attrs[i] = {
-            'model': model,
-            'loss_functions': loss_functions,
-            'target_tensors': target_tensors,
-            'training_endpoints': training_endpoints,
-            'optimizer': opt
-        }
+      train_attrs[i] = {
+          'model': model,
+          'loss_functions': loss_functions,
+          'optimizer': opt
+      }
     self._train_attrs = train_attrs
     self._is_compiled = True
 
-  def fit(x, y, ):
-
+  def fit(self, x, y):
     if not self._is_compiled:
       raise ValueError("model is not compiled. Call compile() method first.")
 
+    # create tensors for true labels
+    # the same tensor is fed to all ensemble losses
+    target_tensor = train_utils.create_training_target(
+        train_utils.infer_shape_from_numpy_array(y))
+    self._target_tensor = target_tensor
 
+    # create losses and optimization step operation
+    for i in range(self.n_replicas):
+      loss_function = self._train_attrs[i]['loss_function']
+      y_pred = self._train_attrs[i]['model'].outputs[0]
+      loss_function = self._train_attrs[i]['loss_functions'][0]
+      loss = loss_function(target_tensor, y_pred)
+      self._train_attrs[i]['loss'] = loss
+      var_list = self._train_attrs[i]['model'].trainable_variables
+
+      train_op = self._train_attrs[i]['optimizer'].minimize(loss,
+                                                            var_list)
+      self._train_attrs[i]['train_op'] = train_op
+
+    return self._train_attrs

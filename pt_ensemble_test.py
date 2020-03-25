@@ -9,7 +9,7 @@ def test_pt_ensemble():
   def model_builder(hp):
     inputs = tf.keras.layers.Input((2,))
     res = tf.keras.layers.Dense(2, activation=tf.nn.relu)(inputs)
-    dropout_rate = hp.get_hparam('dropout_rate')
+    dropout_rate = hp.get_hparam('dropout_rate', default_value=0.0)
     res = tf.keras.layers.Dropout(dropout_rate)(res)
     res = tf.keras.layers.Dense(2, activation=tf.nn.softmax)(res)
     model = tf.keras.models.Model(inputs, res)
@@ -39,7 +39,10 @@ def test_pt_ensemble():
   hp = {'learning_rate': [0.0 , 0.03], 'dropout_rate': [0.0, 0.1]}
   #optimizer = tf.keras.optimizers.SGD()
   optimizer = 'sgd'
-  optimizer = tf.keras.optimizers.SGD(tf.placeholder(tf.float32, ()))
+  optimizer = tf.keras.optimizers.SGD()
   loss = 'sparse_categorical_crossentropy'
-  return ensemble.compile(optimizer, loss, hp)
+  ensemble.compile(optimizer, loss, hp)
+  x = np.random.normal(0, 1, (10, 2))
+  y = np.random.randint(0, 2, (10,))
+  return ensemble.fit(x, y)
 

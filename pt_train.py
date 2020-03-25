@@ -3,6 +3,16 @@ import random
 import numpy as np
 import tensorflow as tf
 
+def model_iteration(model,
+                    inputs,
+                    targets,
+                    batch_size=None,
+                    epochs=1,
+                    callbacks=None):
+  
+  
+  
+
 class HyperParamState:
   """Represents the hyper-parameter state of all replicas."""
   def __init__(self, hp_dict):
