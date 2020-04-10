@@ -84,13 +84,6 @@ def test_pt_ensemble():
   exchange_hparams = [None]
   errors = [ValueError]
 
-  # # hyperparams of different sizes
-  # optimizers.append(None)
-  # losses.append(None)
-  # hp = {'learning_rate': [0.0 , 0.03], 'dropout_rate': [0.0]}
-  # exchange_hparams.append(hp)
-  # errors.append(AssertionError)
-
   zipped = zip(optimizers, losses, exchange_hparams, errors)
   for optimizer, loss, hp, error in zipped:
     with pytest.raises(error):
@@ -105,4 +98,4 @@ def test_pt_ensemble():
       'learning_rate': [0.0 , 0.03],
       'dropout_rate': [0.0, 0.1]
   }
-  return ensemble.fit(x, y, exchange_hparams=hp)
+  return ensemble.fit(x, y, exchange_hparams=hp, epochs=3, batch_size=2)

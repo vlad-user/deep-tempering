@@ -91,6 +91,10 @@ class DataIterable:
     self._next = self._iterator.get_next()
 
   def __iter__(self):
+    # When invoking validation in training loop, avoid creating iterator and
+    # list of feed values for the same validation dataset multiple times (which
+    # essentially would call `iterator.get_next()` that slows down execution
+    # and leads to OOM errors eventually.
     if not tf.executing_eagerly():
       sess = tf.compat.v1.keras.backend.get_session()
       sess.run(self._iterator.initializer)

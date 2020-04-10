@@ -3,10 +3,12 @@ from collections import abc
 
 import tensorflow as tf
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
+from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 import tqdm
 
 import pt_train_utils as train_utils
+import callbacks as cbks
 
 class HPState:
   def __init__(self):
@@ -213,7 +215,7 @@ class EnsembleModel:
     return names
 
   def test_on_batch(self, x, y):
-
+    """Test all replicas on a single batch of samples."""
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       feed_dict.update({
@@ -225,7 +227,7 @@ class EnsembleModel:
 
       metric_tensors = self._get_metric_tensors('loss')
 
-      evaluated = self._run(metric_tensors + ops, feed_dict=feed_dict)
+      evaluated = self._run(metric_tensors, feed_dict=feed_dict)
       metrics = evaluated
 
       return metrics
@@ -233,7 +235,7 @@ class EnsembleModel:
       raise NotImplementedError()
 
   def train_on_batch(self, x, y):
-
+    """Runs a single gradient update on a single batch of data."""
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       feed_dict.update({
@@ -242,7 +244,6 @@ class EnsembleModel:
       hp_tensors_and_values = (
           self._hp_state_space.prepare_feed_tensors_and_values(training=True))
       feed_dict.update(hp_tensors_and_values)
-
 
       metric_tensors = self._get_metric_tensors('loss')
       ops = self._get_train_ops()
@@ -259,7 +260,6 @@ class EnsembleModel:
                     feed_dict=feed_dict,
                     options=options,
                     run_metadata=run_metadata)
-
 
   def fit(self,
           x,
@@ -292,31 +292,41 @@ class EnsembleModel:
 
       self._train_attrs[i]['train_op'] = train_op
 
-    return _graph_mode_train_loop(self,
-                                  x,
-                                  y,
-                                  exchange_hparams,
-                                  validation_split=validation_split,
-                                  validation_data=validation_data,
-                                  batch_size=batch_size,
-                                  epochs=epochs,
-                                  callbacks=callbacks)
-
-def _graph_mode_train_loop(model,
+    return model_iteration(self,
                            x,
                            y,
                            exchange_hparams,
-                           validation_split=0.0,
-                           validation_data=None,
-                           batch_size=2,
-                           epochs=1,
-                           callbacks=None,
-                           random_data_split_state=0):
+                           validation_split=validation_split,
+                           validation_data=validation_data,
+                           batch_size=batch_size,
+                           epochs=epochs,
+                           callbacks=callbacks)
 
-  datasets = train_utils.prepare_data_iterables(
-      x, y, validation_split, validation_data, batch_size=32,
-      shuffle=True, shuffle_buf_size=1024,
-      random_state=random_data_split_state)
+  def reset_metrics(self):
+    pass
+
+def model_iteration(model,
+                    x,
+                    y,
+                    exchange_hparams,
+                    callbacks=None,
+                    validation_split=0.0,
+                    validation_data=None,
+                    batch_size=2,
+                    epochs=1,
+                    random_data_split_state=0,
+                    mode=ModeKeys.TRAIN,
+                    verbose=1):
+  """
+  """
+  # TODO: docstring
+  # prepare and validate data (TODO: validate)
+  if datasets is None:
+
+    datasets = train_utils.prepare_data_iterables(
+        x, y, validation_split, validation_data, batch_size=32,
+        shuffle=True, shuffle_buf_size=1024,
+        random_state=random_data_split_state)
 
   if len(datasets) == 1:
     do_validation = False
@@ -325,22 +335,89 @@ def _graph_mode_train_loop(model,
     do_validation = True
     train_dataset, test_dataset = datasets
 
-  # callbacks.on_train_begin()
+  # TODO: calculate `steps_per_epochs`
+
+  # TODO: `_print_train_info()` here
+
+  # TODO: deal with use_steps, num_samples, steps_per_epochs,
+  # num_samples_or_steps
+  # TODO: Add predict aggregator
+  steps_per_epoch = x.shape[0] // batch_size
+  num_samples_or_steps = x.shape[0]
+  aggregator = keras_train_utils.MetricsAggregator(
+      use_steps=False,
+      num_samples=None if steps_per_epoch else num_samples_or_steps,
+      steps=steps_per_epoch)
+
+  # Configure callbacks
+  callbacks = cbks.configure_callbacks(
+      callbacks,
+      model,
+      do_validation=do_validation,
+      batch_size=batch_size,
+      samples=num_samples_or_steps,
+      epochs=epochs,
+      verbose=verbose,
+      mode=mode)
+  callbacks._call_begin_hook(mode)
+
+
   for epoch in range(epochs):
-    # callbacks.on_epoch_begin()
-    for step, (x, y) in enumerate(train_dataset):
-      # callbacks.on_batch_begin()
-      metrics = model.train_on_batch(x, y)
-      # callbacks.on_batch_end()
+    epoch_logs = {}
+    if mode != ModeKeys.PREDICT:
+      # Collecting and resetting metrics has non-zero cost and will needlessly
+      # slow down model.predict.
+      model.reset_metrics()
 
-    # callbacks.on_epoch_end()
-    if not do_validation:
-      continue
+    if mode == ModeKeys.TRAIN:
+      callbacks.on_epoch_begin(epoch, epoch_logs)
 
-    for _, (x, y) in test_dataset:
-      metrics = model.test_on_batch(x, y)
+    # batch_start and batch_end are added so we can use the
+    # Keras' aggregator (which accepts it as args)
+    batch_start = 0
+    batch_end = batch_size
+    for batch_index, (x, y) in enumerate(train_dataset):
+      # Callbacks batch_begin.
+      batch_logs = {'batch': batch_index, 'size': steps_per_epoch}
+      callbacks._call_batch_hook(mode, 'begin', batch_index, batch_logs)
 
+      # Get outputs.
+      batch_outs = model.train_on_batch(x, y)
+      if not isinstance(batch_outs, list):
+        batch_outs = [batch_outs]
 
-      break
+      # Aggregate results.
+      if batch_index == 0:
+        aggregator.create(batch_outs)
+      aggregator.aggregate(batch_outs, batch_start, batch_end)
 
+      # Callbacks batch end.
+      batch_logs = cbks.make_logs(model, batch_logs, batch_outs, mode)
+      callbacks._call_batch_hook(mode, 'end', batch_index, batch_logs)
 
+      # Note: following should be removed in tensorflow versions older
+      # than '1.15.2' (to be honest I need to check from which versions
+      # to remove below lines). It calls explicitly the `on_batch_end()` of the
+      # progbar callback.
+      progbar = callbacks.callbacks[2]
+      if isinstance(progbar, tf.keras.callbacks.ProgbarLogger):
+        progbar.on_batch_end(batch_index, batch_logs)
+
+      batch_start += y.shape[0]
+      batch_end += y.shape[0]
+
+    aggregator.finalize()
+    results = aggregator.results
+    epoch_logs = cbks.make_logs(model, epoch_logs, results, mode)
+    if len(results) == 1:
+      results = results[0]
+
+    if mode == ModeKeys.TRAIN:
+      # Epochs only apply to `fit`.
+      callbacks.on_epoch_end(epoch, epoch_logs)
+
+  callbacks._call_end_hook(mode)
+  callbacks.on_train_end()
+  if mode == ModeKeys.TRAIN:
+    return model.history
+  return results
