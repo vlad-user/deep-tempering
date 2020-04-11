@@ -7,8 +7,8 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 import tqdm
 
-import pt_train_utils as train_utils
-import callbacks as cbks
+from . import train_utils
+from . import callbacks as cbks
 
 class HPState:
   def __init__(self):

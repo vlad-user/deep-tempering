@@ -1,6 +1,6 @@
-import pt_ensemble
-import callbacks as cbks
-from pt_ensemble_test import model_builder
+from . import ensemble_model
+from . import callbacks as cbks
+from .ensemble_model_test import model_builder
 
 def configure_callbacks_test():
   model = pt_ensemble.EnsembleModel(model_builder)
