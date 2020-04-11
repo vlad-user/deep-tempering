@@ -23,16 +23,21 @@ make_logs = functools.partial(cbks.make_logs)
 
 #   def _call_batch_hook(self, mode, )
 
+def get_progbar(model):
+  """Get Progbar."""
+  stateful_metric_names = model.metrics_names[model.n_replicas:]
+  return cbks.ProgbarLogger('samples', stateful_metric_names)
+
+
 def configure_callbacks(callbacks,
                         model,
                         do_validation=False,
                         batch_size=None,
+                        samples=None,
                         epochs=None,
                         steps_per_epoch=None,
-                        samples=None,
                         verbose=1,
-                        mode=ModeKeys.TRAIN,
-                        count_mode='samples'):
+                        mode=ModeKeys.TRAIN):
   """Configures callbacks for use in various training loops.
 
   It is just a reimplementation of `set_callback_parameters()`
@@ -70,7 +75,7 @@ def configure_callbacks(callbacks,
 
   # implement a new progress bar here
   if verbose:
-    progbar = cbks.ProgbarLogger(count_mode)
+    progbar = cbks.ProgbarLogger('samples')
     callbacks.append(progbar)
   callback_list = cbks.CallbackList(callbacks)
 

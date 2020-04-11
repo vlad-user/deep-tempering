@@ -74,6 +74,112 @@ def model_builder(hp):
 
   return model
 
+def model_iteration_test():
+  # test that history stores accurate losses
+  model = pt_ensemble.EnsembleModel(pt_ensemble_test.model_builder)
+
+  n_replicas = 3
+  optimizer = tf.keras.optimizers.SGD()
+  loss = 'sparse_categorical_crossentropy'
+  model.compile(optimizer, loss, n_replicas)
+  x = np.random.normal(0, 1, (6, 2))
+
+  y_train = np.arange(6).astype('float')
+  y_test = np.arange(6, 12).astype('float')
+  hp = {
+    'learning_rate': [0.01 , 0.02, 0.3],
+    'dropout_rate': [0.0, 0.1, 0.3]
+  }
+
+  batch_size = 3
+  epochs = 5
+  validation_data = (x, y_test)
+
+  def train_on_batch(x, y):
+      return [y[0], y[1], y[2]]
+
+  def test_on_batch(x, y):
+      return [y[0], y[1], y[2]]
+
+  model.train_on_batch = train_on_batch
+  model.test_on_batch = test_on_batch
+
+  history = model.fit(x,
+                      y_train,
+                      exchange_hparams=hp,
+                      epochs=epochs,
+                      batch_size=batch_size,
+                      validation_data=validation_data,
+                      shuffle=False,
+                      verbose=0)
+
+  expected_hist = {
+      'loss_0': [1.5] * epochs,
+      'loss_1': [2.5] * epochs,
+      'loss_2': [3.5] * epochs,
+      'val_loss_0': [7.5] * epochs,
+      'val_loss_1': [8.5] * epochs,
+      'val_loss_2': [9.5] * epochs
+  }
+  assert expected_hist == history.history
+
+
+  # test the case when the last batch size is smaller than others
+  model = pt_ensemble.EnsembleModel(pt_ensemble_test.model_builder)
+  n_replicas = 3
+  optimizer = tf.keras.optimizers.SGD()
+  loss = 'sparse_categorical_crossentropy'
+  model.compile(optimizer, loss, n_replicas)
+  x = np.random.normal(0, 1, (5, 2))
+  y_train = np.arange(5).astype('float')
+  y_test = np.arange(5, 10).astype('float')
+  hp = {
+      'learning_rate': [0.01 , 0.02, 0.3],
+      'dropout_rate': [0.0, 0.1, 0.3]
+  }
+
+  batch_size = 3
+  epochs = 5
+  validation_data = (x, y_test)
+
+
+  def train_on_batch(x, y):
+    if y.shape[0] < 3:
+      res = [y[0], y[1], (y[0] + y[1]) / 2]
+    else:
+      res = [y[0], y[1], y[2]]
+    return res
+
+  def test_on_batch(x, y):
+    if y.shape[0] < 3:
+      res = [y[0], y[1], (y[0] + y[1]) / 2]
+    else:
+      res = [y[0], y[1], y[2]]
+    return res
+  
+  model.train_on_batch = train_on_batch
+  model.test_on_batch = test_on_batch
+
+  history = model.fit(x,
+                      y_train,
+                      exchange_hparams=hp,
+                      epochs=epochs,
+                      batch_size=batch_size,
+                      validation_data=validation_data,
+                      shuffle=False)
+
+  expected_hist = {
+      'loss_0': [0 * (3/5) + 3 * (2/5)] * epochs,
+      'loss_1': [1 * (3/5) + 4 * (2/5)] * epochs,
+      'loss_2': [2 * (3/5) + 3.5 * (2/5)] * epochs,
+      'val_loss_0': [5 * (3/5) + 8 * (2/5)] * epochs,
+      'val_loss_1': [6 * (3/5) + 9 * (2/5)] * epochs,
+      'val_loss_2': [7 * (3/5) + 8.5 * (2/5)] * epochs
+  }
+  for k in expected_hist:
+      np.testing.assert_almost_equal(history.history[k], expected_hist[k])
+
+
 def test_pt_ensemble():
 
   ensemble = pt_ensemble.EnsembleModel(model_builder)

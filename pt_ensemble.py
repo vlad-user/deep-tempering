@@ -152,7 +152,7 @@ class EnsembleModel:
       optimizer_config = {
           'class_name': optimizer,
           'config': {}
-      }
+    }
     elif (isinstance(optimizer, abc.Mapping)
           and 'class_name' in optimizer
           and 'config' in optimizer):
@@ -269,6 +269,9 @@ class EnsembleModel:
           validation_data=None,
           batch_size=2,
           epochs=1,
+          shuffle=True,
+          validation_freq=1,
+          verbose=1,
           callbacks=None):
     if not self._is_compiled:
       raise ValueError("model is not compiled. Call compile() method first.")
@@ -295,38 +298,86 @@ class EnsembleModel:
     return model_iteration(self,
                            x,
                            y,
-                           exchange_hparams,
                            validation_split=validation_split,
                            validation_data=validation_data,
+                           validation_freq=validation_freq,
                            batch_size=batch_size,
                            epochs=epochs,
-                           callbacks=callbacks)
+                           callbacks=callbacks,
+                           shuffle=shuffle,
+                           verbose=verbose)
 
   def reset_metrics(self):
     pass
 
+def _make_execution_function(model, mode):
+  if mode == ModeKeys.TRAIN:
+    return model.train_on_batch
+  elif mode == ModeKeys.TEST:
+    return model.test_on_batch
+  elif mode == ModeKeys.PREDICT:
+    raise NotImplementedError()
+  else:
+    raise ValueError('Unrecognized mode: ', mode)
+
 def model_iteration(model,
-                    x,
-                    y,
-                    exchange_hparams,
-                    callbacks=None,
-                    validation_split=0.0,
-                    validation_data=None,
+                    inputs,
+                    targets=None,
                     batch_size=2,
                     epochs=1,
+                    verbose=1,
+                    callbacks=None,
+                    validation_data=None,
+                    shuffle=False,
+                    steps_per_epoch=None,
+                    validation_split=0.0,
+                    validation_freq=1,
                     random_data_split_state=0,
-                    mode=ModeKeys.TRAIN,
-                    verbose=1):
-  """
+                    mode=ModeKeys.TRAIN):
+  """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
+  Args:
+    model: `EnsembleModel` instance.
+    inputs: Either a list or dictionary of arrays, or a dataset instance.
+    targets: List/dictionary of input arrays.
+    batch_size: Integer batch size or None if unknown.
+    epochs: Number of times to iterate over the data
+    verbose: 0, 1, or 2. Verbosity mode.
+      0 = silent, 1 = progress bar, 2 = one line per epoch.
+      Note that the progress bar is not particularly useful when
+      logged to a file, so verbose=2 is recommended when not running
+      interactively (eg, in a production environment).
+    callbacks: List of callbacks to be called during training
+    validation_data:
+    shuffle: Whether to shuffle the data at the beginning of each epoch
+      concatenation of list the display names of the outputs of `f` and the
+      list of display names of the outputs of `f_val`.
+    steps_per_epoch: Total number of steps (batches of samples) before
+      declaring one epoch finished and starting the next epoch. Ignored with
+      the default value of `None`.
+    validation_freq: Only relevant if validation data is provided. Integer or
+      `collections_abc.Container` instance (e.g. list, tuple, etc.). If an
+      integer, specifies how many training epochs to run before a new
+      validation run is performed, e.g. `validation_freq=2` runs
+      validation every 2 epochs. If a Container, specifies the epochs on
+      which to run validation, e.g. `validation_freq=[1, 2, 10]` runs
+      validation at the end of the 1st, 2nd, and 10th epochs.
+    mode: One of ModeKeys.TRAIN/ModeKeys.TEST/ModeKeys.PREDICT.
+
+
+  Returns:
+    - In TRAIN mode: `History` object.
+    - In TEST mode: Evaluation metrics.
+    - In PREDICT mode: Outputs of the Model called on inputs.
+  Raises:
+    ValueError: in case of invalid arguments.
   """
   # TODO: docstring
   # prepare and validate data (TODO: validate)
-  if datasets is None:
 
-    datasets = train_utils.prepare_data_iterables(
-        x, y, validation_split, validation_data, batch_size=32,
-        shuffle=True, shuffle_buf_size=1024,
-        random_state=random_data_split_state)
+  datasets = train_utils.prepare_data_iterables(
+      inputs, targets, validation_split, validation_data, batch_size=batch_size,
+      shuffle=shuffle, shuffle_buf_size=1024,
+      random_state=random_data_split_state)
 
   if len(datasets) == 1:
     do_validation = False
@@ -334,20 +385,24 @@ def model_iteration(model,
   else:
     do_validation = True
     train_dataset, test_dataset = datasets
+    validation_steps = len(test_dataset)# // batch_size
 
   # TODO: calculate `steps_per_epochs`
+
+  f = _make_execution_function(model, mode)
 
   # TODO: `_print_train_info()` here
 
   # TODO: deal with use_steps, num_samples, steps_per_epochs,
   # num_samples_or_steps
+
+  steps_per_epoch = steps_per_epoch or len(train_dataset)# // batch_size
+  num_samples_or_steps = len(train_dataset)
+
   # TODO: Add predict aggregator
-  steps_per_epoch = x.shape[0] // batch_size
-  num_samples_or_steps = x.shape[0]
-  aggregator = keras_train_utils.MetricsAggregator(
-      use_steps=False,
-      num_samples=None if steps_per_epoch else num_samples_or_steps,
-      steps=steps_per_epoch)
+  aggregator = train_utils.MetricsAggregator(
+      n_replicas=model.n_replicas,
+      num_samples=len(train_dataset))
 
   # Configure callbacks
   callbacks = cbks.configure_callbacks(
@@ -357,12 +412,27 @@ def model_iteration(model,
       batch_size=batch_size,
       samples=num_samples_or_steps,
       epochs=epochs,
-      verbose=verbose,
+      verbose=0,
       mode=mode)
+
+  # Since tensorflow 2.2 the progbar callback could be taken care of
+  # within the `CallbackList` instance. Currently, it is implemented
+  # separately. See the following commit for more:
+  # https://github.com/tensorflow/tensorflow/commit/10666c59dd4858645d1b03ce01f4450da80710ec
+  progbar = cbks.get_progbar(model)
+  progbar.params = callbacks.params
+  progbar.params['verbose'] = verbose
+
+  callbacks.model.stop_training = False # maybe remove this
   callbacks._call_begin_hook(mode)
+  progbar.on_train_begin()
 
 
   for epoch in range(epochs):
+    if callbacks.model.stop_training:
+      break
+
+    # Setup work for each epoch
     epoch_logs = {}
     if mode != ModeKeys.PREDICT:
       # Collecting and resetting metrics has non-zero cost and will needlessly
@@ -371,18 +441,22 @@ def model_iteration(model,
 
     if mode == ModeKeys.TRAIN:
       callbacks.on_epoch_begin(epoch, epoch_logs)
+    progbar.on_epoch_begin(epoch, epoch_logs)
 
     # batch_start and batch_end are added so we can use the
-    # Keras' aggregator (which accepts it as args)
+    # Keras' aggregator. It accepts it as args to compute
+    # weighted batch size average of the overall losses.
     batch_start = 0
-    batch_end = batch_size
     for batch_index, (x, y) in enumerate(train_dataset):
       # Callbacks batch_begin.
-      batch_logs = {'batch': batch_index, 'size': steps_per_epoch}
+      batch_end = batch_start + y.shape[0]
+      batch_logs = {'batch': batch_index, 'size': y.shape[0]}
       callbacks._call_batch_hook(mode, 'begin', batch_index, batch_logs)
+      progbar.on_batch_begin(batch_index, batch_logs)
 
       # Get outputs.
-      batch_outs = model.train_on_batch(x, y)
+      batch_outs = f(x, y)
+
       if not isinstance(batch_outs, list):
         batch_outs = [batch_outs]
 
@@ -394,17 +468,12 @@ def model_iteration(model,
       # Callbacks batch end.
       batch_logs = cbks.make_logs(model, batch_logs, batch_outs, mode)
       callbacks._call_batch_hook(mode, 'end', batch_index, batch_logs)
+      progbar.on_batch_end(batch_index, batch_logs)
 
-      # Note: following should be removed in tensorflow versions older
-      # than '1.15.2' (to be honest I need to check from which versions
-      # to remove below lines). It calls explicitly the `on_batch_end()` of the
-      # progbar callback.
-      progbar = callbacks.callbacks[2]
-      if isinstance(progbar, tf.keras.callbacks.ProgbarLogger):
-        progbar.on_batch_end(batch_index, batch_logs)
+      batch_start = batch_end
 
-      batch_start += y.shape[0]
-      batch_end += y.shape[0]
+      if callbacks.model.stop_training:
+        break
 
     aggregator.finalize()
     results = aggregator.results
@@ -412,9 +481,27 @@ def model_iteration(model,
     if len(results) == 1:
       results = results[0]
 
+    if (do_validation and
+        keras_train_utils.should_run_validation(validation_freq, epochs)):
+      val_results = model_iteration(
+          model,
+          test_dataset,
+          targets=None,
+          batch_size=batch_size,
+          steps_per_epoch=validation_steps,
+          callbacks=callbacks,
+          verbose=0,
+          mode=ModeKeys.TEST)
+      if not isinstance(val_results, list):
+        val_results = [val_results]
+
+      epoch_logs = cbks.make_logs(
+          model, epoch_logs, val_results, mode, prefix='val_')
+
     if mode == ModeKeys.TRAIN:
       # Epochs only apply to `fit`.
       callbacks.on_epoch_end(epoch, epoch_logs)
+    progbar.on_epoch_end(epoch, epoch_logs)
 
   callbacks._call_end_hook(mode)
   callbacks.on_train_end()
