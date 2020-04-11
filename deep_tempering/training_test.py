@@ -2,11 +2,11 @@ import pytest
 import tensorflow as tf
 import numpy as np
 
-from . import ensemble_model
+from deep_tempering import training
 
 def test_hp_space_state():
 
-  em = ensemble_model.EnsembleModel(model_builder)
+  em = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
   loss = 'sparse_categorical_crossentropy'
   n_replicas = 6
@@ -16,7 +16,7 @@ def test_hp_space_state():
           'learning_rate': np.linspace(0.001, 0.01, n_replicas),
           'dropout_rate': np.linspace(0., 0.6, n_replicas)
       }
-  hpss = ensemble_model.HPSpaceState(em, hparams_dict)
+  hpss = training.HPSpaceState(em, hparams_dict)
 
   # test that initial hyper-parameter values are correct
   initial_values = {
@@ -62,7 +62,9 @@ def test_hp_space_state():
   expected_values.sort(key=lambda x: x[0])
   expected = [v[1] for v in expected_values]
 
-  assert actual == expected
+  print(actual)
+  print(expected)
+  np.testing.assert_almost_equal(actual, expected)
 
 def model_builder(hp):
   inputs = tf.keras.layers.Input((2,))
@@ -74,9 +76,9 @@ def model_builder(hp):
 
   return model
 
-def model_iteration_test():
+def test_model_iteration():
   # test that history stores accurate losses
-  model = ensemble_model.EnsembleModel(pt_ensemble_test.model_builder)
+  model = training.EnsembleModel(model_builder)
 
   n_replicas = 3
   optimizer = tf.keras.optimizers.SGD()
@@ -125,7 +127,7 @@ def model_iteration_test():
 
 
   # test the case when the last batch size is smaller than others
-  model = ensemble_model.EnsembleModel(pt_ensemble_test.model_builder)
+  model = training.EnsembleModel(model_builder)
   n_replicas = 3
   optimizer = tf.keras.optimizers.SGD()
   loss = 'sparse_categorical_crossentropy'
@@ -182,7 +184,7 @@ def model_iteration_test():
 
 def test_pt_ensemble():
 
-  ensemble = ensemble_model.EnsembleModel(model_builder)
+  ensemble = training.EnsembleModel(model_builder)
 
   # all args are `None`
   optimizers = [None]

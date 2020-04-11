@@ -7,8 +7,8 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 import tqdm
 
-from . import train_utils
-from . import callbacks as cbks
+from deep_tempering import training_utils
+from deep_tempering import callbacks as cbks
 
 class HPState:
   def __init__(self):
@@ -128,6 +128,7 @@ class EnsembleModel:
               optimizer,
               loss,
               n_replicas,
+              metrics=None,
               target_tensors=None):
 
     if any(arg is None for arg in (optimizer, loss, n_replicas)):
@@ -279,8 +280,8 @@ class EnsembleModel:
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
-    target_tensor = train_utils.create_training_target(
-        train_utils.infer_shape_from_numpy_array(y))
+    target_tensor = training_utils.create_training_target(
+        training_utils.infer_shape_from_numpy_array(y))
     self._target_tensor = target_tensor
 
     # create losses and optimization step operation
@@ -374,7 +375,7 @@ def model_iteration(model,
   # TODO: docstring
   # prepare and validate data (TODO: validate)
 
-  datasets = train_utils.prepare_data_iterables(
+  datasets = training_utils.prepare_data_iterables(
       inputs, targets, validation_split, validation_data, batch_size=batch_size,
       shuffle=shuffle, shuffle_buf_size=1024,
       random_state=random_data_split_state)
@@ -400,7 +401,7 @@ def model_iteration(model,
   num_samples_or_steps = len(train_dataset)
 
   # TODO: Add predict aggregator
-  aggregator = train_utils.MetricsAggregator(
+  aggregator = training_utils.MetricsAggregator(
       n_replicas=model.n_replicas,
       num_samples=len(train_dataset))
 

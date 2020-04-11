@@ -1,9 +1,12 @@
-from . import ensemble_model
-from . import callbacks as cbks
-from .ensemble_model_test import model_builder
+import tensorflow as tf
+import numpy as np
 
-def configure_callbacks_test():
-  model = pt_ensemble.EnsembleModel(model_builder)
+from deep_tempering import training
+from deep_tempering import callbacks as cbks
+from deep_tempering.training_test import model_builder
+
+def test_configure_callbacks():
+  model = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
   loss = 'sparse_categorical_crossentropy'
   n_replicas = 6
@@ -30,4 +33,5 @@ def configure_callbacks_test():
   kwargs['steps'] = (kwargs['steps_per_epoch'], kwargs.pop('steps_per_epoch'))[0]
 
   # test that params are stored as intended
+
   assert kwargs == callbacklist.params

@@ -1,6 +1,6 @@
 import numpy as np
 
-from . import train_utils as utils
+from deep_tempering import training_utils as utils
 
 
 def test_iterator():
@@ -28,8 +28,8 @@ def test_prepare_data_iterables():
   # test that 1 dataset is returned when there is no validation split
   datasets = utils.prepare_data_iterables(x_data, y_data)
   assert len(datasets) == 1
-  
-  # test that 2 datasets are returns when 1 > validation_split > 0
+
+  # test that 2 datasets are returned when 1 > validation_split > 0
   validation_split = 0.2
   datasets = utils.prepare_data_iterables(x_data,
                                           y_data,
