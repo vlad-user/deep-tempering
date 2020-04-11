@@ -9,7 +9,7 @@ import random
 import tensorflow as tf
 import numpy as np
 
-import pt_ensemble
+import deep_tempering as dt
 
 def model_builder(hp):
   inputs = tf.keras.layers.Input((2,))
@@ -21,24 +21,26 @@ def model_builder(hp):
 
   return model
 
-ensemble = pt_ensemble.EnsembleModel(model_builder)
+n_replicas = 6
+model = dt.EnsembleModel(model_builder)
 hp = {
-  'learning_rate': [0.0 , 0.03],
-  'dropout_rate': [0.0, 0.1]
+    'learning_rate': np.linspace(0.01, 0.001, n_replicas)
+    'dropout_rate': np.linspce(0, 0.5, n_replicas)
 }
 
-# (maybe to put `exchange_hparams` to `fit()`)
-ensemble.compile(optimizer=tf.keras.optimizers.SGD(),
-                 loss='sparse_categorical_crossentropy',
-                 metrics=['accuracy'])
+model.compile(optimizer=tf.keras.optimizers.SGD(),
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'],
+              n_replicas=n_replicas)
 
 x = np.random.normal(0, 1, (10, 2))
 y = np.random.randint(0, 2, (10,))
-history = ensemble.fit(x,
-                       y,
-                       exchange_hparams=hp,
-                       batch_size=2,
-                       epochs=2,
-                       swap_step=4,
-                       burn_in=15)
+
+history = model.fit(x,
+                    y,
+                    exchange_hparams=hp,
+                    batch_size=2,
+                    epochs=2,
+                    swap_step=4,
+                    burn_in=15)
 ```

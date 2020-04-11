@@ -63,10 +63,6 @@ def test_hp_space_state():
   expected_values.sort(key=lambda x: x[0])
   expected = [v[1] for v in expected_values]
 
-  print(actual)
-  print(lr_items)
-  print(expected)
-  print(expected_values)
   np.testing.assert_almost_equal(actual, expected)
 
 def model_builder(hp):
