@@ -5,7 +5,8 @@ import numpy as np
 from deep_tempering import training
 
 def test_hp_space_state():
-
+  tf.compat.v1.reset_default_graph()
+  tf.compat.v1.keras.backend.clear_session()
   em = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
   loss = 'sparse_categorical_crossentropy'
@@ -63,7 +64,9 @@ def test_hp_space_state():
   expected = [v[1] for v in expected_values]
 
   print(actual)
+  print(lr_items)
   print(expected)
+  print(expected_values)
   np.testing.assert_almost_equal(actual, expected)
 
 def model_builder(hp):
