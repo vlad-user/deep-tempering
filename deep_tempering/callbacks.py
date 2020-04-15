@@ -8,26 +8,11 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 
 make_logs = functools.partial(cbks.make_logs)
 
-# class CallbackList(cbks.CallbackList):
-
-#   def __init__(self, *args, **kwargs):
-#     super().__init__(*args, **kwargs)
-
-#   def _call_begin_hook(self, mode):
-#     super()._call_begin_hook(mode)
-
-#     if tf.__version__ <= '1.15.2':
-#       progbar = self.callbacks[2]
-#       if isinstance(progbar, cbks.ProgbarLogger):
-#         progbar.on_train_begin()
-
-#   def _call_batch_hook(self, mode, )
 
 def get_progbar(model):
   """Get Progbar."""
   stateful_metric_names = model.metrics_names[model.n_replicas:]
   return cbks.ProgbarLogger('samples', stateful_metric_names)
-
 
 def configure_callbacks(callbacks,
                         model,
@@ -95,10 +80,6 @@ def configure_callbacks(callbacks,
       mode=mode)
 
   callback_list.model.stop_training = False
-
-  # if tf.__version__ <= '1.15.2':
-  #   progbar.param = callback_list.params
-  #   progbar.params['verbose'] = verbose
 
   return callback_list
 
