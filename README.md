@@ -2,10 +2,8 @@
 Replica-exchange optimisation method for Tensorflow with Keras-like interface.
 
 
-(Intened usage example)
+Usage example:
 ```python
-import random
-
 import tensorflow as tf
 import numpy as np
 

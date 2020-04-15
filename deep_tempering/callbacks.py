@@ -81,10 +81,6 @@ def configure_callbacks(callbacks,
 
   callback_list.model.stop_training = False
 
-  # if tf.__version__ <= '1.15.2':
-  #   progbar.param = callback_list.params
-  #   progbar.params['verbose'] = verbose
-
   return callback_list
 
 

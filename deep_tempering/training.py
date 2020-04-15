@@ -1,5 +1,8 @@
 import itertools
+import inspect
+import copy
 from collections import abc
+from collections import OrderedDict
 
 import tensorflow as tf
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
@@ -111,6 +114,8 @@ class EnsembleModel:
     self._model_builder_fn = model_builder
     self._is_compiled = False
     self.run_eagerly = False
+    self._compile_metrics = None
+    self._stateful_metrics_names = None
 
     # Stores attributes such as losses, optimizers, states of hyperparameters
     # as dictionary {replica_id: {loss:..., optimizer:..,}}
@@ -141,6 +146,8 @@ class EnsembleModel:
     # ...
 
     self.n_replicas = n_replicas
+    metrics = metrics or []
+    self._stateful_metrics_names = _stateful_metrics_names(metrics)
 
     # set config for `tf.keras.optimizers.Optimizer` subclasses
     if isinstance(optimizer, tf.keras.optimizers.Optimizer):
@@ -150,6 +157,8 @@ class EnsembleModel:
           'config': config
     }
     elif isinstance(optimizer, str):
+      # TODO: Add test for string optimizer. Check if config == {}
+      # then `_set_hyper(placeholder)` works as expected.
       optimizer_config = {
           'class_name': optimizer,
           'config': {}
@@ -160,10 +169,10 @@ class EnsembleModel:
       optimizer_config = optimizer
     else:
       raise NotImplementedError("Not recognized optimizer.")
+    optimizer_config['config'].pop('name', None)
 
     train_attrs = {i: {} for i in range(self.n_replicas)}
     for i in range(self.n_replicas):
-
       # build model and the state of hyperparameters
       with tf.variable_scope('model_%d' % i):
         hp = HPState()
@@ -192,10 +201,33 @@ class EnsembleModel:
         if isinstance(v, float):
           opt._set_hyper(n, hp.get_hparam(n, default_value=v))
 
+      # Each replica will have now its own metric class. 
+      # For example, if `tf.keras.metrics.Precision()`
+      # is passed to metrics we will duplicate this class
+      # `n_replica` times.
+      # TODO: right now if the initialized class is passed it is not
+      # used. A new class is created instead. This could be improved
+      # by using this class for the first replica. Same could be done
+      # of initialized optimizer.
+      compiled_metrics = []
+      for m in metrics:
+        if isinstance(m, str):
+          m = m
+        elif isinstance(m, tf.keras.metrics.Metric):
+          args_kwargs = training_utils._infer_init_args_kwargs(m)
+          _ = args_kwargs.pop('name', None)
+          m = m.__class__(**args_kwargs)
+        elif callable(m):
+          m = m
+        else:
+          raise ValueError('unexpected metric', m)
+        compiled_metrics.append(m)
+
       train_attrs[i].update({
           'model': model,
           'loss_functions': loss_functions,
-          'optimizer': opt
+          'optimizer': opt,
+          'compiled_metrics': compiled_metrics
       })
     self._train_attrs = train_attrs
     self.inputs = list(itertools.chain(
@@ -203,16 +235,18 @@ class EnsembleModel:
 
     self._is_compiled = True
 
-  def _get_metric_tensors(self, metric_name):
-    return [self._train_attrs[i][metric_name] for i in range(self.n_replicas)]
-
-  def _get_train_ops(self):
-    return [self._train_attrs[i]['train_op'] for i in range(self.n_replicas)]
 
   @property
   def metrics_names(self):
+    # losses
     names = ['loss_%d' %i for i in range(self.n_replicas)]
-    # add more metrics here
+    # the rest of the metrics
+    if self._stateful_metrics_names:
+      for m in self._stateful_metrics_names:
+        if m == 'accuracy':
+          m = 'acc'
+        names += [m + '_%d' %i for i in range(self.n_replicas)]
+
     return names
 
   def test_on_batch(self, x, y):
@@ -227,6 +261,8 @@ class EnsembleModel:
       feed_dict.update(hp_tensors_and_values)
 
       metric_tensors = self._get_metric_tensors('loss')
+      for metric_name in self._stateful_metrics_names:
+        metric_tensors += self._get_metric_tensors(metric_name)
 
       evaluated = self._run(metric_tensors, feed_dict=feed_dict)
       metrics = evaluated
@@ -247,6 +283,11 @@ class EnsembleModel:
       feed_dict.update(hp_tensors_and_values)
 
       metric_tensors = self._get_metric_tensors('loss')
+
+      for metric_name in self._stateful_metrics_names:
+        metric_tensors += self._get_metric_tensors(metric_name)
+
+
       ops = self._get_train_ops()
       evaluated = self._run(metric_tensors + ops, feed_dict=feed_dict)
       metrics = evaluated[:len(metric_tensors)]
@@ -257,6 +298,7 @@ class EnsembleModel:
 
   def _run(self, fetches, feed_dict=None, options=None, run_metadata=None):
     sess = tf.compat.v1.keras.backend.get_session()
+
     return sess.run(fetches,
                     feed_dict=feed_dict,
                     options=options,
@@ -278,19 +320,52 @@ class EnsembleModel:
       raise ValueError("model is not compiled. Call compile() method first.")
     self._hp_state_space = HPSpaceState(self, exchange_hparams)
 
+    if len(y.shape) == 1:
+      y = y[:, None]
+
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
     target_tensor = training_utils.create_training_target(
         training_utils.infer_shape_from_numpy_array(y))
     self._target_tensor = target_tensor
 
+    # metrics_wrappers = {}
+    # metrics_tensors = {}
+
     # create losses and optimization step operation
     for i in range(self.n_replicas):
-      y_pred = self._train_attrs[i]['model'].outputs[0]
-      loss_function = self._train_attrs[i]['loss_functions'][0]
+      model = self._train_attrs[i]['model']
+      loss_functions = self._train_attrs[i]['loss_functions']
+      compiled_metrics = self._train_attrs[i]['compiled_metrics']
+
+      # The target tensor is ready. Create metric tensors.
+      output_names = [o.name for o in model.outputs]
+      output_shapes = [o.shape for o in model.outputs]
+      per_output_metrics = keras_train_utils.collect_per_output_metric_info(
+          compiled_metrics, output_names, output_shapes,
+          loss_functions)[0]
+
+      metrics_dict = OrderedDict()
+      for (_, metric_wrapper), name in zip(per_output_metrics.items(),
+                                           self._stateful_metrics_names):
+        metrics_dict[name] = metric_wrapper 
+
+      self._train_attrs[i]['metrics_dict'] = metrics_dict
+      metrics_names = [p[0] for p in metrics_dict.items()]
+      metrics_tensors = self._handle_metrics(model.outputs,
+                                            [self._target_tensor],
+                                            metrics_dict)
+      self._train_attrs[i]['metrics_tensors_dict'] = OrderedDict(
+          [(n, t) for n, t in zip(self._stateful_metrics_names, metrics_tensors)])
+
+      # create losses
+      y_pred = model.outputs[0]
+      loss_function = loss_functions[0]
       loss = loss_function(target_tensor, y_pred)
       self._train_attrs[i]['loss'] = loss
-      var_list = self._train_attrs[i]['model'].trainable_variables
+
+      # create optimization step op
+      var_list = model.trainable_variables
       train_op = self._train_attrs[i]['optimizer'].get_updates(
           loss, var_list)
 
@@ -309,7 +384,110 @@ class EnsembleModel:
                            verbose=verbose)
 
   def reset_metrics(self):
-    pass
+    for i in range(self.n_replicas):
+      for _, v in self._train_attrs[i]['metrics_dict'].items():
+        v.reset_states()
+
+  def _handle_metrics(self,
+                      outputs,
+                      targets=None,
+                      per_outputs_metrics=None):
+    """Handles calling metric functions.
+
+    Args:
+      outputs: List of outputs (predictions).
+      targets: List of targets.
+
+    Returns:
+      A list of metric result tensors.
+    """
+    metric_results = []
+    if not tf.executing_eagerly():
+      with tf.name_scope('metrics'):
+        for i in range(len(outputs)):
+          output = outputs[i] if outputs else None
+          target = targets[i] if targets else None
+          output_mask = None # to be implemented
+          metric_results.extend(
+              self._handle_per_output_metrics(per_outputs_metrics,
+                                              target, output))
+      return metric_results
+
+    else:
+      raise NotImplementedError()
+
+  def _handle_per_output_metrics(self,
+                                 metrics_dict,
+                                 y_true,
+                                 y_pred):
+    """Calls metric functions for a single output.
+
+    Args:
+      metrics_dict: A dict with metric names as keys and metric fns as values.
+      y_true: Target output.
+      y_pred: Predicted output.
+      mask: Computed mask value for the current output.
+    Returns:
+      A list of metric result tensors.
+    """
+    metric_results = []
+    for metric_name, metric_fn in metrics_dict.items():
+      with tf.name_scope(metric_name):
+        metric_result = training_utils.call_metric_function(
+            metric_fn, y_true, y_pred, weights=None, mask=None)
+        metric_results.append(metric_result)
+    return metric_results
+
+
+  def _get_metric_tensors(self, metric_name):
+
+    try:
+      # loss
+      result = [self._train_attrs[i][metric_name] for i in range(self.n_replicas)]
+    except KeyError:
+      try:
+        result = [self._train_attrs[i]['metrics_tensors_dict'][metric_name]
+                  for i in range(self.n_replicas)]
+
+      except KeyError:
+        raise ValueError("Tensor", metric_name, "doesn't exist")
+      except:
+        raise
+
+    return result
+
+  def _get_train_ops(self):
+    return [self._train_attrs[i]['train_op'] for i in range(self.n_replicas)]
+
+  # def _get_training_eval_metrics(self):
+  #   """Returns all the metrics that are to be reported.
+
+  #   This includes the output loss metrics, compile metrics/weighted metrics,
+  #   add_metric metrics.
+  #   """
+  #   # probably won't need this function
+  #   metrics = []
+  #   for m in self._stateful_metrics_names:
+  #     for i in range(self.n_replicas):
+
+  #       metric_name = m + '_' + str(i)
+  #       metrics.append(self._train_attrs[i]['metrics_dict'][metric_name])
+
+  #   return metrics
+
+# def _normalize_metric_name(name, stateful_metrics_names):
+#   # remove this function
+#   if not name.split('_')[-1].isdigit():
+#     return name
+#   else:
+#     digit = name.split('_')[-1]
+#     if digit == '0':
+#       return name
+#     else:
+#       prev_name = '_'.join(name.split('_')[:-1] + [str(int(digit) - 1)])
+#       if prev_name in stateful_metrics_names:
+#         return name
+
 
 def _make_execution_function(model, mode):
   if mode == ModeKeys.TRAIN:
@@ -320,6 +498,23 @@ def _make_execution_function(model, mode):
     raise NotImplementedError()
   else:
     raise ValueError('Unrecognized mode: ', mode)
+
+def _stateful_metrics_names(metrics):
+  stateful_metrics = []
+  for m in metrics:
+    if m in ['accuracy', 'acc']:
+      name = 'acc'
+        
+    elif isinstance(m, tf.keras.metrics.Metric):
+      name = m.name
+    elif callable(m):
+      name = m.__name__
+    else:
+      raise ValueError('unrecognized_metric')
+
+    stateful_metrics.append(name)
+
+  return stateful_metrics
 
 def model_iteration(model,
                     inputs,
@@ -506,6 +701,7 @@ def model_iteration(model,
 
   callbacks._call_end_hook(mode)
   callbacks.on_train_end()
+  model.reset_metrics() # remove this
   if mode == ModeKeys.TRAIN:
     return model.history
   return results

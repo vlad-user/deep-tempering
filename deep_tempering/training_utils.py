@@ -1,4 +1,6 @@
 from collections import abc
+from collections import OrderedDict
+import inspect
 
 import tensorflow as tf
 import numpy as np
@@ -6,6 +8,35 @@ from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
 
+def call_metric_function(metric_fn,
+                         y_true,
+                         y_pred=None,
+                         weights=None,
+                         mask=None):
+  return keras_train_utils.call_metric_function(metric_fn,
+                                                y_true,
+                                                y_pred,
+                                                weights,
+                                                mask)
+
+def _infer_init_args_kwargs(cls_):
+  """Attempts to extract args/kwargs that class `cls_` has been init'ed with."""
+  extracted_signature = OrderedDict()
+  signature = inspect.signature(cls_.__init__)
+  args_dict = OrderedDict(
+      [(k, v.default) for k, v in signature.parameters.items()])
+  for arg in args_dict:
+    default_value = None if args_dict[arg] == inspect._empty else args_dict[arg]
+    extracted_value = None
+    try:
+      extracted_value = cls_.__dict__[arg]
+    except KeyError:
+      try:
+        extracted_value = cls_.__dict__['_' + arg]
+      except KeyError:
+        pass
+    extracted_signature[arg] = extracted_value or default_value
+  return extracted_signature
 
 def infer_shape_from_numpy_array(ary):
   if len(ary.shape) == 1:
@@ -45,15 +76,9 @@ class MetricsAggregator(keras_train_utils.Aggregator):
     for i in range(self.n_replicas):
       self.results[i] += batch_outs[i] * (batch_end - batch_start)
 
-    self.results[self.n_replicas:] = batch_outs[self.n_replicas:]
-    # if self.use_steps:
-    #   self.results[0] += batch_outs[0]
-    # else:
-    #   self.results[0] += batch_outs[0] * (batch_end - batch_start)
     # Metrics (always stateful, just grab current values.)
-    # self.results[1:] = batch_outs[1:]
+    self.results[self.n_replicas:] = batch_outs[self.n_replicas:]
 
-    # self.results = [(batch_end - batch_start) * b for b in batch_outs]
 
   def finalize(self):
     if not self.results:
@@ -61,6 +86,7 @@ class MetricsAggregator(keras_train_utils.Aggregator):
     # self.results[0] /= (self.num_samples or self.steps)
     for i in range(self.n_replicas):
       self.results[i] /= self.num_samples
+
 
 def prepare_data_iterables(x,
                            y=None,
@@ -74,7 +100,6 @@ def prepare_data_iterables(x,
 
   if isinstance(x, DataIterable):
     return [x]
-
 
   if validation_split == 0.0 and validation_data is None:
     return [DataIterable(x, y, batch_size, epochs, shuffle, shuffle_buf_size)]
@@ -138,11 +163,10 @@ class DataIterable:
     self.shuffle_buf_size = shuffle_buf_size
     self.__len = x.shape[0]
     _validate_dataset_shapes(*[x, y])
-    d = tf.data.Dataset.from_tensor_slices(
-        {
-            'x': x,
-            'y': y
-          })
+    d = tf.data.Dataset.from_tensor_slices({
+        'x': x,
+        'y': y
+    })
     d = d.repeat(self.epochs)
     if self.shuffle:
       d = d.shuffle(self.shuffle_buf_size)

@@ -53,7 +53,7 @@ def test_prepare_data_iterables():
       results_y.append(y)
   x_test = np.concatenate(results_x, axis=0)
   y_test = np.concatenate(results_y, axis=0)
-  
+
   results_x = []
   results_y = []
   for (x, y) in train_dataset:
@@ -61,7 +61,7 @@ def test_prepare_data_iterables():
       results_y.append(y)
   x_train = np.concatenate(results_x, axis=0)
   y_train = np.concatenate(results_y, axis=0)
-  
+
   assert x_test.shape[0] == validation_split * data_size
   assert x_train.shape[0] == data_size - validation_split * data_size
   assert x_test.shape[0] == y_test.shape[0]
