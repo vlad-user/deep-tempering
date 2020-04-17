@@ -552,25 +552,29 @@ def model_iteration(model,
       shuffle=shuffle, shuffle_buf_size=1024,
       random_state=random_data_split_state)
 
+  val_samples_or_steps =  None
   if len(datasets) == 1:
     do_validation = False
     train_dataset = datasets[0]
   else:
     do_validation = True
     train_dataset, test_dataset = datasets
-    validation_steps = len(test_dataset)
+    val_samples_or_steps = len(test_dataset)
+  num_samples_or_steps = len(train_dataset)
 
   f = _make_execution_function(model, mode)
-
-  # TODO: `_print_train_info()` here
-
-
-  num_samples_or_steps = len(train_dataset)
 
   # TODO: Add predict aggregator
   aggregator = training_utils.MetricsAggregator(
       n_replicas=model.n_replicas,
       num_samples=len(train_dataset))
+
+  if mode == ModeKeys.TRAIN and verbose:
+    _print_train_info(num_samples_or_steps,
+                      val_samples_or_steps,
+                      replicas=model.n_replicas,
+                      increment='samples')
+
 
   # Configure callbacks
   callbacks = cbks.configure_callbacks(
@@ -661,3 +665,12 @@ def model_iteration(model,
   if mode == ModeKeys.TRAIN:
     return model.history
   return results
+
+def _print_train_info(num_samples_or_steps, val_samples_or_steps, replicas, increment):
+  msg = 'Train on {0} {increment}'.format(
+      num_samples_or_steps, increment=increment)
+  if val_samples_or_steps:
+    msg += ', validate on {0} {increment}'.format(
+        val_samples_or_steps, increment=increment)
+  msg += '. Ensemble of size {0}.'.format(replicas)
+  print(msg)
