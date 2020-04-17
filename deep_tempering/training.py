@@ -58,11 +58,16 @@ class HPSpaceState:
     self.ensemble_model = ensemble_model
     hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())
     n_replicas = len(hparams_dict[hparams_dict.__iter__().__next__()])
+    self._hyperparameter_names = sorted(list(hparams_dict.keys()))
     self.n_replicas = n_replicas
     self.hpspace = {
         i: {k: v[i] for k, v in hparams_dict.items()}
         for i in range(n_replicas)
     }
+
+  @property
+  def hyperparameters_names(self):
+    return self._hyperparameter_names
 
   def swap_between(self, replica_i, replica_j, name):
     hp_i = self.hpspace[replica_i][name]
@@ -229,6 +234,7 @@ class EnsembleModel:
           'optimizer': opt,
           'compiled_metrics': compiled_metrics
       })
+
     self._train_attrs = train_attrs
     self.inputs = list(itertools.chain(
         *[train_attrs[i]['model'].inputs for i in range(n_replicas)]))
@@ -459,35 +465,9 @@ class EnsembleModel:
   def _get_train_ops(self):
     return [self._train_attrs[i]['train_op'] for i in range(self.n_replicas)]
 
-  # def _get_training_eval_metrics(self):
-  #   """Returns all the metrics that are to be reported.
-
-  #   This includes the output loss metrics, compile metrics/weighted metrics,
-  #   add_metric metrics.
-  #   """
-  #   # probably won't need this function
-  #   metrics = []
-  #   for m in self._stateful_metrics_names:
-  #     for i in range(self.n_replicas):
-
-  #       metric_name = m + '_' + str(i)
-  #       metrics.append(self._train_attrs[i]['metrics_dict'][metric_name])
-
-  #   return metrics
-
-# def _normalize_metric_name(name, stateful_metrics_names):
-#   # remove this function
-#   if not name.split('_')[-1].isdigit():
-#     return name
-#   else:
-#     digit = name.split('_')[-1]
-#     if digit == '0':
-#       return name
-#     else:
-#       prev_name = '_'.join(name.split('_')[:-1] + [str(int(digit) - 1)])
-#       if prev_name in stateful_metrics_names:
-#         return name
-
+  @property
+  def hpspace(self):
+    return self._hp_state_space
 
 def _make_execution_function(model, mode):
   if mode == ModeKeys.TRAIN:
@@ -516,6 +496,7 @@ def _stateful_metrics_names(metrics):
 
   return stateful_metrics
 
+
 def model_iteration(model,
                     inputs,
                     targets=None,
@@ -525,7 +506,6 @@ def model_iteration(model,
                     callbacks=None,
                     validation_data=None,
                     shuffle=False,
-                    steps_per_epoch=None,
                     validation_split=0.0,
                     validation_freq=1,
                     random_data_split_state=0,
@@ -547,9 +527,6 @@ def model_iteration(model,
     shuffle: Whether to shuffle the data at the beginning of each epoch
       concatenation of list the display names of the outputs of `f` and the
       list of display names of the outputs of `f_val`.
-    steps_per_epoch: Total number of steps (batches of samples) before
-      declaring one epoch finished and starting the next epoch. Ignored with
-      the default value of `None`.
     validation_freq: Only relevant if validation data is provided. Integer or
       `collections_abc.Container` instance (e.g. list, tuple, etc.). If an
       integer, specifies how many training epochs to run before a new
@@ -581,18 +558,14 @@ def model_iteration(model,
   else:
     do_validation = True
     train_dataset, test_dataset = datasets
-    validation_steps = len(test_dataset)# // batch_size
-
-  # TODO: calculate `steps_per_epochs`
+    validation_steps = len(test_dataset)
 
   f = _make_execution_function(model, mode)
 
   # TODO: `_print_train_info()` here
 
-  # TODO: deal with use_steps, num_samples, steps_per_epochs,
   # num_samples_or_steps
 
-  steps_per_epoch = steps_per_epoch or len(train_dataset)# // batch_size
   num_samples_or_steps = len(train_dataset)
 
   # TODO: Add predict aggregator
@@ -684,7 +657,6 @@ def model_iteration(model,
           test_dataset,
           targets=None,
           batch_size=batch_size,
-          steps_per_epoch=validation_steps,
           callbacks=callbacks,
           verbose=0,
           mode=ModeKeys.TEST)

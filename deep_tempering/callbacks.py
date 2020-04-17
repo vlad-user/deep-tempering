@@ -1,13 +1,15 @@
 """Wrappers for Keras' callbacks."""
 import copy
+import random
 import functools
+import collections
 
 import tensorflow as tf
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
+import numpy as np
 
 make_logs = functools.partial(cbks.make_logs)
-
 
 def get_progbar(model):
   """Get Progbar."""
@@ -129,3 +131,84 @@ def set_callback_parameters(callback_list,
       'metrics': callback_metrics,
   }
   callback_list.set_params(callback_params)
+
+
+class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
+  def __init__(self, swap_step, burn_in=None):
+    super(BaseHPExchangeCallback, self).__init__()
+    self.swap_step = swap_step
+    self.burn_in = burn_in or 1
+
+  @property
+  def should_exchange(self):
+    global_step = self.model.global_step
+    return (global_step > self.burn_in
+        and self.swap_step % global_step == 0)
+
+  @property
+  def ordered_hyperparams(self):
+    result = {}
+    hpspace = self.model.hpspace
+    for hpname in hpspace.hyperparameters_names:
+      result[hpname] = hpspace.get_ordered_hparams(hpname)
+    return result
+
+  def get_ordered_losses(self, logs):
+    all_losses_keys = [l for l in logs.keys() if l.startswith('loss')]
+    all_losses_keys.sort(key=self._metrics_sorting_key)
+    res = [(name, logs[name]) for name in all_losses_keys]
+    return res
+
+  def _metrics_sorting_key(self, metric_name):
+    """Key for sorting indexed metrics names.
+
+    For example, losses indexed with with one index level
+    (loss_1, loss_2, etc) come before losses with two index
+    levels (loss_1_0, loss_1_1).
+    """
+    splitted = metric_name.split('_')
+    # `index_level` is the level of underscore indices in the metric name
+    # For example, `index_level` of `loss_1_2` is 2. 
+    index_level = 0
+    indices = []
+    for item in reversed(splitted):
+      if item.isdigit():
+        index_level += 1
+        indices.append(item)
+      else:
+        break
+    return int(str(index_level) + ''.join(reversed(indices)))
+
+class MetropolisExchangeCallback(BaseHPExchangeCallback):
+  """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
+  def __init__(self, swap_step, burn_in=None):
+    super(MetropolisExchangeCallback, self).__init__(swap_step, burn_in)
+
+
+  def exchange(self, losses, hpname=None, exchange_pair=None, coeff=1.):
+    hp = self.ordered_hyperparams
+    n_replicas = self.model.n_replicas
+    # pick random hyperparameter to exchange
+    hpname = hpname or random.choice(list(hp.keys()))
+    hyperparams = [h[1] for h in hp[hpname]]
+
+    # pick random replica pair to exchange
+    exchange_pair = exchange_pair or np.random.randint(1, n_replicas)
+    i = exchange_pair
+    j = exchange_pair - 1
+
+    # compute betas
+    if 'dropout' in hpname:
+      beta_i = (1. - hyperparams[i]) / hyperparams[i]
+      beta_j = (1. - hyperparams[j]) / hyperparams[j]
+    else:
+      # learning rate
+      beta_i = 1. / hyperparams[i]
+      beta_j = 1. / hyperparams[j]
+
+    # beta_i - beta_j is expected to be negative
+    proba = min(np.exp(
+        coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
+
+    if np.random.uniform() < proba:
+      self.model.hpspace.swap_between(i, j, hpname)
