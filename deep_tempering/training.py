@@ -335,9 +335,6 @@ class EnsembleModel:
         training_utils.infer_shape_from_numpy_array(y))
     self._target_tensor = target_tensor
 
-    # metrics_wrappers = {}
-    # metrics_tensors = {}
-
     # create losses and optimization step operation
     for i in range(self.n_replicas):
       model = self._train_attrs[i]['model']
@@ -544,9 +541,6 @@ def model_iteration(model,
   Raises:
     ValueError: in case of invalid arguments.
   """
-  # TODO: docstring
-  # prepare and validate data (TODO: validate)
-
   datasets = training_utils.prepare_data_iterables(
       inputs, targets, validation_split, validation_data, batch_size=batch_size,
       shuffle=shuffle, shuffle_buf_size=1024,
