@@ -190,13 +190,13 @@ def test_metrics_and_losses():
   # 3. I compare final weights and history values of metrics and losses.
 
   # test a number of times. 
-  for _ in range(5):
+  for _ in range(1):
 
     tf.compat.v1.keras.backend.clear_session()
     x_data, y_data = make_blobs(n_samples=32, centers=[[1, 1], [-1, -1]])
     batch_size = 8
     epochs = 5
-    verbose = 0
+    verbose = 1
     init1 = np.random.normal(0, 0.5, (2, 2)).astype('float32')
     init2 = np.random.normal(0, 0.2, (2, 1)).astype('float32')
 

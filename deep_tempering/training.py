@@ -564,7 +564,6 @@ def model_iteration(model,
 
   # TODO: `_print_train_info()` here
 
-  # num_samples_or_steps
 
   num_samples_or_steps = len(train_dataset)
 
@@ -581,20 +580,11 @@ def model_iteration(model,
       batch_size=batch_size,
       samples=num_samples_or_steps,
       epochs=epochs,
-      verbose=0,
+      verbose=1,
       mode=mode)
 
-  # Since tensorflow 2.2 the progbar callback could be taken care of
-  # within the `CallbackList` instance. Currently, it is implemented
-  # separately. See the following commit for more:
-  # https://github.com/tensorflow/tensorflow/commit/10666c59dd4858645d1b03ce01f4450da80710ec
-  progbar = cbks.get_progbar(model)
-  progbar.params = callbacks.params
-  progbar.params['verbose'] = verbose
-
-  callbacks.model.stop_training = False # maybe remove this
+  callbacks.model.stop_training = False
   callbacks._call_begin_hook(mode)
-  progbar.on_train_begin()
 
 
   for epoch in range(epochs):
@@ -608,9 +598,7 @@ def model_iteration(model,
       # slow down model.predict.
       model.reset_metrics()
 
-    if mode == ModeKeys.TRAIN:
-      callbacks.on_epoch_begin(epoch, epoch_logs)
-    progbar.on_epoch_begin(epoch, epoch_logs)
+    callbacks._call_epoch_hook(mode, 'begin', epoch, epoch_logs)
 
     # batch_start and batch_end are added so we can use the
     # Keras' aggregator. It accepts it as args to compute
@@ -621,7 +609,6 @@ def model_iteration(model,
       batch_end = batch_start + y.shape[0]
       batch_logs = {'batch': batch_index, 'size': y.shape[0]}
       callbacks._call_batch_hook(mode, 'begin', batch_index, batch_logs)
-      progbar.on_batch_begin(batch_index, batch_logs)
 
       # Get outputs.
       batch_outs = f(x, y)
@@ -637,7 +624,6 @@ def model_iteration(model,
       # Callbacks batch end.
       batch_logs = cbks.make_logs(model, batch_logs, batch_outs, mode)
       callbacks._call_batch_hook(mode, 'end', batch_index, batch_logs)
-      progbar.on_batch_end(batch_index, batch_logs)
 
       batch_start = batch_end
 
@@ -666,14 +652,12 @@ def model_iteration(model,
       epoch_logs = cbks.make_logs(
           model, epoch_logs, val_results, mode, prefix='val_')
 
-    if mode == ModeKeys.TRAIN:
-      # Epochs only apply to `fit`.
-      callbacks.on_epoch_end(epoch, epoch_logs)
-    progbar.on_epoch_end(epoch, epoch_logs)
+    # Epochs only apply to `fit`.
+    callbacks._call_epoch_hook(mode, 'end', epoch, epoch_logs)
 
   callbacks._call_end_hook(mode)
   callbacks.on_train_end()
-  model.reset_metrics() # remove this
+
   if mode == ModeKeys.TRAIN:
     return model.history
   return results
