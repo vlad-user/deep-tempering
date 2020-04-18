@@ -578,7 +578,7 @@ def model_iteration(model,
       batch_size=batch_size,
       samples=num_samples_or_steps,
       epochs=epochs,
-      verbose=1,
+      verbose=verbose,
       mode=mode)
 
   callbacks.model.stop_training = False
@@ -650,11 +650,10 @@ def model_iteration(model,
       epoch_logs = cbks.make_logs(
           model, epoch_logs, val_results, mode, prefix='val_')
 
-    # Epochs only apply to `fit`.
     callbacks._call_epoch_hook(mode, 'end', epoch, epoch_logs)
 
   callbacks._call_end_hook(mode)
-  callbacks.on_train_end()
+  callbacks.on_train_end() # TODO: move this to CallbackListWrap
 
   if mode == ModeKeys.TRAIN:
     return model.history

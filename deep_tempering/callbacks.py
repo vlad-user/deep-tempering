@@ -51,7 +51,6 @@ def configure_callbacks(callbacks,
   # Check if callbacks have already been configured.
   if isinstance(callbacks, (cbks.CallbackList, CallbackListWrapper)):
     if mode == ModeKeys.TEST:
-      # print('configure_callbacks', mode)
       callbacks.set_test_progbar(get_progbar(model), verbose=verbose)
     return callbacks
 
@@ -65,9 +64,6 @@ def configure_callbacks(callbacks,
 
   
   callback_list = CallbackListWrapper(callbacks)
-  # implement a new progress bar here
-  
-  # callback_list = cbks.CallbackList(callbacks)
 
   # Set callback model
   callback_model = model #._get_callback_model()  # pylint: disable=protected-access
@@ -182,6 +178,7 @@ class CallbackListWrapper(cbks.CallbackList):
       self.progbar.on_epoch_begin(epoch, epoch_logs)
 
   def _on_epoch_end(self, epoch, epoch_logs, mode=None):
+    # Epochs only apply to `fit`.
     if mode == ModeKeys.TRAIN: 
       super().on_epoch_end(epoch, epoch_logs)
     if self.progbar is not None:
@@ -196,7 +193,8 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
-    # remove test progbar if was created
+    # Remove test progbar if was created. Set train progress bar
+    # if it was previously existed.
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
