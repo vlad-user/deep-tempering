@@ -49,7 +49,10 @@ def configure_callbacks(callbacks,
   """
 
   # Check if callbacks have already been configured.
-  if isinstance(callbacks, cbks.CallbackList):
+  if isinstance(callbacks, (cbks.CallbackList, CallbackListWrapper)):
+    if mode == ModeKeys.TEST:
+      # print('configure_callbacks', mode)
+      callbacks.set_test_progbar(get_progbar(model), verbose=verbose)
     return callbacks
 
   if not callbacks:
@@ -87,56 +90,6 @@ def configure_callbacks(callbacks,
     callback_list.set_progbar(progbar, verbose=verbose)
 
   return callback_list
-
-class CallbackListWrapper(cbks.CallbackList):
-  """Wrapper for CallbackList instance.
-  
-  Before tensorflow2.2 progress bar is implemented separetely.
-  In tensorflow 2.2 the progbar callback could be taken care of
-  within the `CallbackList` instance. Currently, it is implemented
-  separately. See the following commit for more:
-  https://github.com/tensorflow/tensorflow/commit/10666c59dd4858645d1b03ce01f4450da80710ec
-  """
-  def __init__(self, *args, **kwargs):
-    super(CallbackListWrapper, self).__init__(*args, **kwargs)
-    self.progbar = None
-  
-  def set_progbar(self, progbar, verbose=0):
-    self.progbar = progbar
-    self.progbar.params = self.params
-    self.progbar.params['verbose'] = verbose
-
-  def _call_begin_hook(self, mode):
-    super()._call_begin_hook(mode)
-    if self.progbar is not None:
-      self.progbar.on_train_begin()
-
-  def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
-    if hook_name == 'begin':
-      return self._on_epoch_begin(epoch, epoch_logs, mode=mode)
-    elif hook_name == 'end':
-      return self._on_epoch_end(epoch, epoch_logs, mode=mode)
-
-  def _on_epoch_begin(self, epoch, epoch_logs, mode=None):
-    if mode == ModeKeys.TRAIN: 
-      super().on_epoch_begin(epoch, epoch_logs)
-    if self.progbar is not None:
-      self.progbar.on_epoch_begin(epoch, epoch_logs)
-
-  def _on_epoch_end(self, epoch, epoch_logs, mode=None):
-    if mode == ModeKeys.TRAIN: 
-      super().on_epoch_end(epoch, epoch_logs)
-    if self.progbar is not None:
-      self.progbar.on_epoch_end(epoch, epoch_logs)
-
-  def _call_batch_hook(self, mode, hook_name, batch_index, batch_logs):
-    super()._call_batch_hook(mode, hook_name, batch_index, batch_logs)
-    if self.progbar is not None:
-      if hook_name == 'begin':
-        self.progbar.on_batch_begin(batch_index, batch_logs)
-      elif hook_name == 'end':
-        self.progbar.on_batch_end(batch_index, batch_logs)
-
 
 def set_callback_parameters(callback_list,
                             model,
@@ -184,6 +137,71 @@ def set_callback_parameters(callback_list,
   }
   callback_list.set_params(callback_params)
 
+
+class CallbackListWrapper(cbks.CallbackList):
+  """Wrapper for CallbackList instance.
+  
+  Before tensorflow2.2 progress bar is implemented separetely.
+  In tensorflow 2.2 the progbar callback could be taken care of
+  within the `CallbackList` instance. Currently, it is implemented
+  separately. See the following commit for more:
+  https://github.com/tensorflow/tensorflow/commit/10666c59dd4858645d1b03ce01f4450da80710ec
+  """
+  def __init__(self, *args, **kwargs):
+    super(CallbackListWrapper, self).__init__(*args, **kwargs)
+    self.progbar = None
+    self._train_progbar = None
+  
+  def set_progbar(self, progbar, verbose=0):
+    self.progbar = progbar
+    self.progbar.params = self.params
+    self.progbar.params['verbose'] = verbose
+
+  def set_test_progbar(self, progbar, verbose):
+    if self.progbar is not None:
+      self._train_progbar = self.progbar
+      self.progbar = progbar
+      self.progbar.params = self.params
+      self.progbar.params['verbose'] = verbose
+
+  def _call_begin_hook(self, mode):
+    super()._call_begin_hook(mode)
+    if self.progbar is not None:
+      self.progbar.on_train_begin()
+
+  def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
+    if hook_name == 'begin':
+      return self._on_epoch_begin(epoch, epoch_logs, mode=mode)
+    elif hook_name == 'end':
+      return self._on_epoch_end(epoch, epoch_logs, mode=mode)
+
+  def _on_epoch_begin(self, epoch, epoch_logs, mode=None):
+    if mode == ModeKeys.TRAIN: 
+      super().on_epoch_begin(epoch, epoch_logs)
+    if self.progbar is not None:
+      self.progbar.on_epoch_begin(epoch, epoch_logs)
+
+  def _on_epoch_end(self, epoch, epoch_logs, mode=None):
+    if mode == ModeKeys.TRAIN: 
+      super().on_epoch_end(epoch, epoch_logs)
+    if self.progbar is not None:
+      self.progbar.on_epoch_end(epoch, epoch_logs)
+
+  def _call_batch_hook(self, mode, hook_name, batch_index, batch_logs):
+    super()._call_batch_hook(mode, hook_name, batch_index, batch_logs)
+    if self.progbar is not None:
+      if hook_name == 'begin':
+        self.progbar.on_batch_begin(batch_index, batch_logs)
+      elif hook_name == 'end':
+        self.progbar.on_batch_end(batch_index, batch_logs)
+
+  def _call_end_hook(self, mode):
+    # remove test progbar if was created
+    if mode == ModeKeys.TEST:
+      test_progbar = self.progbar
+      self.progbar = self._train_progbar
+      del test_progbar
+    super()._call_end_hook(mode)
 
 class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
   def __init__(self, swap_step, burn_in=None):
