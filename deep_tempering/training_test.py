@@ -98,10 +98,10 @@ def test_model_iteration():
   validation_data = (x, y_test)
 
   def train_on_batch(x, y):
-      return [y[0], y[1], y[2]]
+    return [y[0], y[1], y[2]]
 
   def test_on_batch(x, y):
-      return [y[0], y[1], y[2]]
+    return [y[0], y[1], y[2]]
 
   model.train_on_batch = train_on_batch
   model.test_on_batch = test_on_batch
@@ -183,6 +183,7 @@ def test_model_iteration():
                                    expected_hist[k])
 
 def test_metrics_and_losses():
+  """Tests metrics and losses for `model.fit()` and `model.evaluate()`."""
   # Explanation of how do I test metrics and losses:
   # 1. I generate two replicas and train them within the my model_iteration.
   # 2. I train two same models initialized with exact same weights but using
@@ -240,7 +241,8 @@ def test_metrics_and_losses():
     expected_auc = hist.history['auc']
     expected_auc_1 = hist.history['auc_1']
 
-    evaluated = model.evaluate(x_data, y_data, verbose=0)
+    expected_evaluated = model.evaluate(x_data, y_data, verbose=0)
+    expected_predicted = model.predict(x_data)
 
     # ensemble model
     tf.compat.v1.keras.backend.clear_session()
@@ -267,8 +269,19 @@ def test_metrics_and_losses():
                    batch_size=batch_size,
                    shuffle=False,
                    verbose=verbose)
+    actual_evaluated = em.evaluate(x_data, y_data, verbose=0)
+    actual_predicted = em.predict(x_data)
 
+    # compare evaluation metrics
+    size = len(expected_evaluated)
+    np.testing.assert_almost_equal(expected_evaluated,
+                                   actual_evaluated[::2][:size])
 
+    # compare predicted outputs
+    np.testing.assert_almost_equal(expected_predicted,
+                                   actual_predicted[::2][0])
+
+    # compare training history
     loss_0 = hist2.history['loss_0']
     loss_1 = hist2.history['loss_1']
     acc_0 = hist2.history['acc_0']
@@ -299,6 +312,7 @@ def test_metrics_and_losses():
     assert len(set(auc_1_1))
 
   tf.compat.v1.keras.backend.clear_session()
+
 
 def ensemble_model_predict(model, data):
   predicted = []

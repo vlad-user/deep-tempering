@@ -7,6 +7,7 @@ import numpy as np
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
+from sklearn.utils import shuffle as arrays_shuffle
 
 def call_metric_function(metric_fn,
                          y_true,
@@ -83,7 +84,7 @@ class MetricsAggregator(keras_train_utils.Aggregator):
   def finalize(self):
     if not self.results:
       raise ValueError('Empty training data.')
-    # self.results[0] /= (self.num_samples or self.steps)
+
     for i in range(self.n_replicas):
       self.results[i] /= self.num_samples
 
@@ -95,45 +96,28 @@ def prepare_data_iterables(x,
                            batch_size=32,
                            epochs=1,
                            shuffle=True,
-                           shuffle_buf_size=1024,
                            random_state=0):
 
   if isinstance(x, DataIterable):
     return [x]
 
   if validation_split == 0.0 and validation_data is None:
-    return [DataIterable(x, y, batch_size, epochs, shuffle, shuffle_buf_size)]
+    return [DataIterable(x, y, batch_size, epochs, shuffle)]
 
   elif validation_split == 0.0 and validation_data is not None:
-    train_dataset = DataIterable(x,
-                                 y,
-                                 batch_size,
-                                 epochs,
-                                 shuffle,
-                                 shuffle_buf_size)
+    train_dataset = DataIterable(x, y, batch_size, epochs, shuffle)
     test_dataset = DataIterable(validation_data[0],
                                 validation_data[1],
                                 batch_size,
                                 epochs,
-                                shuffle,
-                                shuffle_buf_size)
+                                shuffle)
     return [train_dataset, test_dataset]
 
   elif  0.0 < validation_split < 1:
     x_train, x_test, y_train, y_test = train_test_split(x, y,
         test_size=validation_split, random_state=random_state)
-    train_dataset = DataIterable(x_train,
-                                 y_train,
-                                 batch_size,
-                                 epochs,
-                                 shuffle,
-                                 shuffle_buf_size)
-    test_dataset = DataIterable(x_test,
-                                y_test,
-                                batch_size,
-                                epochs,
-                                shuffle,
-                                shuffle_buf_size)
+    train_dataset = DataIterable(x_train, y_train, batch_size, epochs, shuffle)
+    test_dataset = DataIterable(x_test, y_test, batch_size, epochs, shuffle)
     return [train_dataset, test_dataset]
   else:
     raise ValueError('Cannot parition data.')
@@ -150,14 +134,85 @@ def _validate_dataset_shapes(*args):
   if len(set([s[0] for s in shapes])) != 1:
     raise ValueError('First dimension of inputs and targets must be equal')
 
-
 class DataIterable:
+  """Batch-wise iterable for numpy data."""
+  def __init__(self, x, y=None, batch_size=32, epochs=1, shuffle=False):
+    x = np.asarray(x)
+
+    if y is not None:
+      y = np.asarray(y)
+      assert x.shape[0] == y.shape[0]
+    self.data = {
+        'x': x,
+        'y': y
+    }
+    self.batch_size = batch_size
+    self.epochs = epochs
+    self.shuffle = shuffle
+
+  def __iter__(self):
+    return _NumpyIterator(self.data,
+                          self.batch_size,
+                          self.epochs,
+                          self.shuffle)
+
+  def __len__(self):
+    return self.data['x'].shape[0]
+
+class _NumpyIterator:
+  def __init__(self, data_dict, batch_size, epochs, shuffle):
+    self.data_dict = data_dict
+    self.batch_size = batch_size or 128
+    self.epochs = epochs
+    self.shuffle = shuffle
+    self.begin = 0
+    self.end = min(self.batch_size, data_dict['x'].shape[0])
+    self.epoch_num = 0
+
+  def __next__(self):
+    x = self.data_dict['x']
+    y = self.data_dict['y']
+    if self.begin == 0 and self.shuffle and y is not None:
+      x, y = arrays_shuffle(x, y)
+    if self.begin >= x.shape[0]:
+      self.epoch_num += 1
+      if self.epoch_num >= self.epochs:
+        raise StopIteration()
+      else:
+        self.begin = 0
+        self.end = min(self.batch_size, x.shape[0])
+
+    batch_x = x[self.begin: self.end]
+    if y is not None:
+      batch_y = y[self.begin: self.end]
+
+    self.begin = self.end
+    self.end += self.batch_size
+
+    if y is not None:
+      return batch_x, batch_y
+    else:
+      return batch_x
+
+class _GraphModeIterator:
+  def __init__(self, next_elem):
+    self.next_elem = next_elem
+
+  def __next__(self):
+    try:
+      sess = tf.compat.v1.keras.backend.get_session()
+      evaled = sess.run(self.next_elem)
+    except tf.compat.v1.errors.OutOfRangeError:
+      raise StopIteration()
+    return evaled['x'], evaled['y']
+
+class GraphModeDataIterable:
   # TODO: Extend support for eager iteration
   # Implement Wrapper for other than numpy arrays data types.
 
   def __init__(self, x, y, batch_size=32, epochs=1, shuffle=True, shuffle_buf_size=1024):
 
-    self.batch_size = min(batch_size, y.shape[0])
+    self.batch_size = min(batch_size or 128, y.shape[0])
     self.epochs = epochs
     self.shuffle = shuffle
     self.shuffle_buf_size = shuffle_buf_size
@@ -189,15 +244,3 @@ class DataIterable:
 
   def __len__(self):
     return self.__len
-
-class _GraphModeIterator:
-  def __init__(self, next_elem):
-    self.next_elem = next_elem
-
-  def __next__(self):
-    try:
-      sess = tf.compat.v1.keras.backend.get_session()
-      evaled = sess.run(self.next_elem)
-    except tf.compat.v1.errors.OutOfRangeError:
-      raise StopIteration()
-    return evaled['x'], evaled['y']
