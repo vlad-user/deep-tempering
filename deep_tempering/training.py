@@ -457,13 +457,14 @@ class EnsembleModel:
     Raises:
       ValueError: in case of invalid arguments.
     """
+    print('evaluate')
     if len(y.shape) == 1:
       y = y[:, None]
 
     if not self._built_losses_metrics_optimizer:
       target_tensor_shape = training_utils.infer_shape_from_numpy_array(y)
       self._build_losses_metrics_optimizer(target_tensor_shape)
-
+    print('evaluate - model_iteration')
     return model_iteration(self,
                            x,
                            y,

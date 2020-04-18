@@ -58,6 +58,14 @@ def configure_callbacks(callbacks,
     callbacks = []
 
   # Add additional callbacks during training.
+  ################# testing #################
+  x = np.random.normal(0, 1, (10, 2))
+  y = np.random.randint(0, 2, (10, 1))
+  exchange_data = (x, y)
+  swap_step = 4
+  model.exchange_callback = MetropolisExchangeCallback(exchange_data, swap_step)
+  callbacks += [model.exchange_callback]
+  ###################################################
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
@@ -84,6 +92,10 @@ def configure_callbacks(callbacks,
   if verbose:
     progbar = get_progbar(model)
     callback_list.set_progbar(progbar, verbose=verbose)
+  if mode == ModeKeys.TRAIN:
+    # `global_step` is incremented each gradient update step
+    callback_list.model.global_step = 0
+
 
   return callback_list
 
@@ -136,7 +148,7 @@ def set_callback_parameters(callback_list,
 
 class CallbackListWrapper(cbks.CallbackList):
   """Wrapper for CallbackList instance.
-  
+
   Before tensorflow2.2 progress bar is implemented separetely.
   In tensorflow 2.2 the progbar callback could be taken care of
   within the `CallbackList` instance. Currently, it is implemented
@@ -147,7 +159,7 @@ class CallbackListWrapper(cbks.CallbackList):
     super(CallbackListWrapper, self).__init__(*args, **kwargs)
     self.progbar = None
     self._train_progbar = None
-  
+
   def set_progbar(self, progbar, verbose=0):
     self.progbar = progbar
     self.progbar.params = self.params
@@ -159,6 +171,17 @@ class CallbackListWrapper(cbks.CallbackList):
       self.progbar = progbar
       self.progbar.params = self.params
       self.progbar.params['verbose'] = verbose
+
+  def maybe_exchange(self):
+    model = self.model
+    exchange_callback = getattr(self.model, 'exchange_callback', None)
+    if exchange_callback is not None and exchange_callback.should_exchange:
+      # compute exchange losses and call user defined `exchange()` function
+      x, y = exchange_callback.exchange_data
+      losses = model.evaluate(x, y, verbose=0)
+      losses = [l[0] for l in losses]
+      exchange_callback.exchange(losses)
+
 
   def _call_begin_hook(self, mode):
     super()._call_begin_hook(mode)
@@ -192,26 +215,54 @@ class CallbackListWrapper(cbks.CallbackList):
       elif hook_name == 'end':
         self.progbar.on_batch_end(batch_index, batch_logs)
 
+    # increment global step `on_batch_end()` and try to exchange
+    if mode == ModeKeys.TRAIN and hook_name == 'end':      
+      self.model.global_step += 1
+      self.maybe_exchange()
+
   def _call_end_hook(self, mode):
-    # Remove test progbar if was created. Set train progress bar
-    # if it was previously existed.
+    # Remove test progbar if it was created. Set train progress bar
+    # if it was previously existed. It happens at the end of the
+    # validation loop during training iterations
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
       del test_progbar
     super()._call_end_hook(mode)
 
-class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
-  def __init__(self, swap_step, burn_in=None):
-    super(BaseHPExchangeCallback, self).__init__()
+
+class BaseExchangeCallback(tf.keras.callbacks.Callback):
+  def __init__(self, exchange_data, swap_step, burn_in=None):
+    super(BaseExchangeCallback, self).__init__()
+    self.exchange_data = exchange_data
     self.swap_step = swap_step
     self.burn_in = burn_in or 1
+
+  def log_exchange(self, losses, hpname=None, exchange_pair=None, proba=None):
+
+    # first log
+    if not hasattr(self, 'per_replica_logs'):
+      self.per_replica_logs = _init_per_replica_logs(self)
+
+    if not hasattr(self, 'progress_logs'):
+
+
+    # log exchangable hyperparams
+    hpspace = self.model.hpspace
+    n_replicas = self.model.n_replicas
+    for i in range(n_replicas):
+      for name in hpspace.hyperparameters_names:
+        self.per_replica_logs[i][name].append(hpspace.hpspace[i][name])
+
+      # log exchange losses
+      self.per_replica_logs[i]['loss'].append(losses[i])
+
 
   @property
   def should_exchange(self):
     global_step = self.model.global_step
     return (global_step > self.burn_in
-        and self.swap_step % global_step == 0)
+            and global_step % self.swap_step == 0)
 
   @property
   def ordered_hyperparams(self):
@@ -247,13 +298,14 @@ class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
         break
     return int(str(index_level) + ''.join(reversed(indices)))
 
-class MetropolisExchangeCallback(BaseHPExchangeCallback):
+class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, swap_step, burn_in=None):
-    super(MetropolisExchangeCallback, self).__init__(swap_step, burn_in)
+  def __init__(self, exchange_data, swap_step, burn_in=None):
+    super(MetropolisExchangeCallback, self).__init__(
+        exchange_data, swap_step, burn_in)
 
 
-  def exchange(self, losses, hpname=None, exchange_pair=None, coeff=1.):
+  def exchange(self, losses, hpname=None, exchange_pair=None, proba=None):
     hp = self.ordered_hyperparams
     n_replicas = self.model.n_replicas
     # pick random hyperparameter to exchange
@@ -275,8 +327,23 @@ class MetropolisExchangeCallback(BaseHPExchangeCallback):
       beta_j = 1. / hyperparams[j]
 
     # beta_i - beta_j is expected to be negative
-    proba = min(np.exp(
+    proba = proba or min(np.exp(
         coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
 
     if np.random.uniform() < proba:
       self.model.hpspace.swap_between(i, j, hpname)
+
+    super().log_exchange(losses, hpname=hpname, exchange_pair=exchange_pair, proba=proba)
+
+def _init_per_replica_logs(callback):
+  """Creates a dict that stores exchange logs per replica."""
+  model = callback.model
+  hpspace = model.hpspace
+  n_replicas = model.n_replicas
+  logs_names = hpspace.hyperparameters_names + ['loss']
+  result = {
+      i: {name: [] for name in logs_names}
+      for i in range(n_replicas)
+  }
+
+  return result
