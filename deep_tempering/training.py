@@ -118,6 +118,7 @@ class EnsembleModel:
 
     self._model_builder_fn = model_builder
     self._is_compiled = False
+    self._built_losses_metrics_optimizer = False
     self.run_eagerly = False
     self._compile_metrics = None
     self._stateful_metrics_names = None
@@ -238,7 +239,8 @@ class EnsembleModel:
     self._train_attrs = train_attrs
     self.inputs = list(itertools.chain(
         *[train_attrs[i]['model'].inputs for i in range(n_replicas)]))
-
+    self.outputs = list(itertools.chain(
+        *[train_attrs[i]['model'].outputs for i in range(n_replicas)]))
     self._is_compiled = True
 
 
@@ -254,6 +256,18 @@ class EnsembleModel:
         names += [m + '_%d' %i for i in range(self.n_replicas)]
 
     return names
+
+  def predict_on_batch(self, x, y):
+    if not tf.executing_eagerly():
+      feed_dict = {input_: x for input_ in self.inputs}
+      hp_tensors_and_values = (
+          self._hp_state_space.prepare_feed_tensors_and_values(training=False))
+      feed_dict.update(hp_tensors_and_values)
+      evaluated = self._run(self.outputs, feed_dict)
+
+      return evaluated
+    else:
+      raise NotImplementedError()
 
   def test_on_batch(self, x, y):
     """Test all replicas on a single batch of samples."""
@@ -310,29 +324,13 @@ class EnsembleModel:
                     options=options,
                     run_metadata=run_metadata)
 
-  def fit(self,
-          x,
-          y,
-          exchange_hparams,
-          validation_split=0.0,
-          validation_data=None,
-          batch_size=2,
-          epochs=1,
-          shuffle=True,
-          validation_freq=1,
-          verbose=1,
-          callbacks=None):
+  def _build_losses_metrics_optimizer(self, target_tensor_shape):
     if not self._is_compiled:
       raise ValueError("model is not compiled. Call compile() method first.")
-    self._hp_state_space = HPSpaceState(self, exchange_hparams)
-
-    if len(y.shape) == 1:
-      y = y[:, None]
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
-    target_tensor = training_utils.create_training_target(
-        training_utils.infer_shape_from_numpy_array(y))
+    target_tensor = training_utils.create_training_target(target_tensor_shape)
     self._target_tensor = target_tensor
 
     # create losses and optimization step operation
@@ -374,6 +372,32 @@ class EnsembleModel:
 
       self._train_attrs[i]['train_op'] = train_op
 
+    self._built_losses_metrics_optimizer = True
+
+  def fit(self,
+          x,
+          y,
+          exchange_hparams,
+          validation_split=0.0,
+          validation_data=None,
+          batch_size=2,
+          epochs=1,
+          shuffle=True,
+          validation_freq=1,
+          verbose=1,
+          callbacks=None):
+    
+    if self._hp_state_space is None:
+      self._hp_state_space = HPSpaceState(self, exchange_hparams)
+
+    if len(y.shape) == 1:
+      y = y[:, None]
+
+
+    if not self._built_losses_metrics_optimizer:
+      target_tensor_shape = training_utils.infer_shape_from_numpy_array(y)
+      self._build_losses_metrics_optimizer(target_tensor_shape)
+
     return model_iteration(self,
                            x,
                            y,
@@ -385,6 +409,112 @@ class EnsembleModel:
                            callbacks=callbacks,
                            shuffle=shuffle,
                            verbose=verbose)
+
+  def evaluate(self,
+               x=None,
+               y=None,
+               batch_size=None,
+               verbose=1,
+               callbacks=None):
+    """Returns the loss value & metrics values for the model in test mode.
+    Computation is done in batches.
+
+    Args:
+      x: Input data. It could be:
+        - A Numpy array (or array-like), or a list of arrays
+          (in case the model has multiple inputs).
+        - A TensorFlow tensor, or a list of tensors
+          (in case the model has multiple inputs).
+        - A dict mapping input names to the corresponding array/tensors,
+          if the model has named inputs.
+        - A `tf.data` dataset.
+        - A generator or `keras.utils.Sequence` instance.
+      y: Target data. Like the input data `x`,
+        it could be either Numpy array(s) or TensorFlow tensor(s).
+        It should be consistent with `x` (you cannot have Numpy inputs and
+        tensor targets, or inversely).
+        If `x` is a dataset, generator or
+        `keras.utils.Sequence` instance, `y` should not be specified (since
+        targets will be obtained from the iterator/dataset).
+      batch_size: Integer or `None`.
+          Number of samples per gradient update.
+          If unspecified, `batch_size` will default to 32.
+          Do not specify the `batch_size` is your data is in the
+          form of symbolic tensors, dataset,
+          generators, or `keras.utils.Sequence` instances (since they generate
+          batches).
+      verbose: 0 or 1. Verbosity mode.
+          0 = silent, 1 = progress bar.
+      callbacks: List of `keras.callbacks.Callback` instances.
+          List of callbacks to apply during evaluation.
+          See [callbacks](/api_docs/python/tf/keras/callbacks).
+
+    Returns:
+      Scalar test loss (if the model has a single output and no metrics)
+      or list of scalars (if the model has multiple outputs
+      and/or metrics). The attribute `model.metrics_names` will give you
+      the display labels for the scalar outputs.
+    Raises:
+      ValueError: in case of invalid arguments.
+    """
+    if len(y.shape) == 1:
+      y = y[:, None]
+
+    if not self._built_losses_metrics_optimizer:
+      target_tensor_shape = training_utils.infer_shape_from_numpy_array(y)
+      self._build_losses_metrics_optimizer(target_tensor_shape)
+
+    return model_iteration(self,
+                           x,
+                           y,
+                           batch_size=batch_size,
+                           epochs=1,
+                           callbacks=callbacks,
+                           verbose=verbose,
+                           mode=ModeKeys.TEST)
+
+  def predict(self,
+              x,
+              batch_size=None,
+              verbose=0,
+              callbacks=None):
+    """Generates output predictions for the input samples.
+    Computation is done in batches.
+    Args:
+      x: Input samples. It could be:
+        - A Numpy array (or array-like), or a list of arrays
+          (in case the model has multiple inputs).
+        - A TensorFlow tensor, or a list of tensors
+          (in case the model has multiple inputs).
+        - A `tf.data` dataset.
+        - A generator or `keras.utils.Sequence` instance.
+      batch_size: Integer or `None`.
+          Number of samples per gradient update.
+          If unspecified, `batch_size` will default to 32.
+          Do not specify the `batch_size` is your data is in the
+          form of symbolic tensors, dataset,
+          generators, or `keras.utils.Sequence` instances (since they generate
+          batches).
+      verbose: Verbosity mode, 0 or 1.
+      callbacks: List of `keras.callbacks.Callback` instances.
+          List of callbacks to apply during prediction.
+          See [callbacks](/api_docs/python/tf/keras/callbacks).
+
+    Returns:
+        Numpy array(s) of predictions.
+    Raises:
+        ValueError: In case of mismatch between the provided
+            input data and the model's expectations,
+            or in case a stateful model receives a number of samples
+            that is not a multiple of the batch size.
+    """
+    return model_iteration(self,
+                           x,
+                           targets=None,
+                           batch_size=batch_size,
+                           callbacks=callbacks,
+                           verbose=verbose,
+                           mode=ModeKeys.PREDICT)
 
   def reset_metrics(self):
     for i in range(self.n_replicas):
@@ -472,7 +602,7 @@ def _make_execution_function(model, mode):
   elif mode == ModeKeys.TEST:
     return model.test_on_batch
   elif mode == ModeKeys.PREDICT:
-    raise NotImplementedError()
+    return model.predict_on_batch
   else:
     raise ValueError('Unrecognized mode: ', mode)
 
@@ -543,8 +673,7 @@ def model_iteration(model,
   """
   datasets = training_utils.prepare_data_iterables(
       inputs, targets, validation_split, validation_data, batch_size=batch_size,
-      shuffle=shuffle, shuffle_buf_size=1024,
-      random_state=random_data_split_state)
+      shuffle=shuffle, random_state=random_data_split_state)
 
   val_samples_or_steps =  None
   if len(datasets) == 1:
@@ -558,10 +687,14 @@ def model_iteration(model,
 
   f = _make_execution_function(model, mode)
 
-  # TODO: Add predict aggregator
-  aggregator = training_utils.MetricsAggregator(
-      n_replicas=model.n_replicas,
-      num_samples=len(train_dataset))
+  if mode == ModeKeys.PREDICT:
+    aggregator = keras_train_utils.OutputsAggregator(
+        use_steps=False,
+        num_samples=num_samples_or_steps)
+  else:
+    aggregator = training_utils.MetricsAggregator(
+        n_replicas=model.n_replicas,
+        num_samples=len(train_dataset))
 
   if mode == ModeKeys.TRAIN and verbose:
     _print_train_info(num_samples_or_steps,
@@ -602,10 +735,15 @@ def model_iteration(model,
     # Keras' aggregator. It accepts it as args to compute
     # weighted batch size average of the overall losses.
     batch_start = 0
-    for batch_index, (x, y) in enumerate(train_dataset):
+    for batch_index, batch_data in enumerate(train_dataset):
       # Callbacks batch_begin.
-      batch_end = batch_start + y.shape[0]
-      batch_logs = {'batch': batch_index, 'size': y.shape[0]}
+      if mode == ModeKeys.PREDICT:
+        x, y = batch_data, None
+      else:
+        x, y = batch_data
+
+      batch_end = batch_start + x.shape[0]
+      batch_logs = {'batch': batch_index, 'size': x.shape[0]}
       callbacks._call_batch_hook(mode, 'begin', batch_index, batch_logs)
 
       # Get outputs.

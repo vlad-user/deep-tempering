@@ -3,16 +3,33 @@ import numpy as np
 from deep_tempering import training_utils as utils
 
 
-def test_iterator():
+def test_graph_mode_iterator():
+  data_size = 10
+  x_data = np.random.normal(0, 1, size=(data_size, 1))
+  y_data = np.arange(data_size)
+  batch_size = 2
+  d = utils.GraphModeDataIterable(x_data,
+                         y_data,
+                         batch_size=batch_size,
+                         epochs=2,
+                         shuffle=False)
+  i = 0
+  for (x, y) in d:
+    if i >= data_size:
+        i = 0
+    assert np.all(y == y_data[i: i + batch_size])
+    i += batch_size
+
+def test_numpy_iterator():
   data_size = 10
   x_data = np.random.normal(0, 1, size=(data_size, 1))
   y_data = np.arange(data_size)
   batch_size = 2
   d = utils.DataIterable(x_data,
-                         y_data,
-                         batch_size=batch_size,
-                         epochs=2,
-                         shuffle=False)
+                              y_data,
+                              batch_size=batch_size,
+                              epochs=2,
+                              shuffle=False)
   i = 0
   for (x, y) in d:
     if i >= data_size:
