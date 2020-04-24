@@ -7,7 +7,8 @@ import numpy as np
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
-from sklearn.utils import shuffle as arrays_shuffle
+from sklearn.utils import shuffle as sklearn_shuffle
+
 
 def call_metric_function(metric_fn,
                          y_true,
@@ -170,10 +171,13 @@ class _NumpyIterator:
     self.epoch_num = 0
 
   def __next__(self):
-    x = self.data_dict['x']
+
     y = self.data_dict['y']
     if self.begin == 0 and self.shuffle and y is not None:
-      x, y = arrays_shuffle(x, y)
+      self.data_dict = arrays_datadict_shuffle(self.data_dict)
+      y = self.data_dict['y']
+
+    x = self.data_dict['x']
     if self.begin >= x.shape[0]:
       self.epoch_num += 1
       if self.epoch_num >= self.epochs:
@@ -244,3 +248,13 @@ class GraphModeDataIterable:
 
   def __len__(self):
     return self.__len
+
+def arrays_datadict_shuffle(datadict):
+
+  indices = np.arange(datadict['x'].shape[0])
+  np.random.shuffle(indices)
+
+  return {
+      k: np.take(v, indices=indices, axis=0) if v is not None else v
+      for k, v in datadict.items()
+  }
