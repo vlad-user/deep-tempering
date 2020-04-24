@@ -107,7 +107,6 @@ class HPSpaceState:
 
         assert placeholder is not None
         feed_dict[placeholder] = value
-    #print('\n', training, [(k.name, v) for k, v in feed_dict.items()])
 
 
     return feed_dict

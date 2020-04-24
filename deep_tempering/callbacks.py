@@ -61,7 +61,6 @@ def configure_callbacks(callbacks,
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
-
   
   callback_list = CallbackListWrapper(callbacks)
 
@@ -84,6 +83,12 @@ def configure_callbacks(callbacks,
   if verbose:
     progbar = get_progbar(model)
     callback_list.set_progbar(progbar, verbose=verbose)
+
+  # Set global step based on which exchanges are scheduled.
+  # This global step is incremented by CallbackListWrapper on each
+  # training batch end.
+  if mode == ModeKeys.TRAIN:
+    model.global_step = 0
 
   return callback_list
 
@@ -136,7 +141,7 @@ def set_callback_parameters(callback_list,
 
 class CallbackListWrapper(cbks.CallbackList):
   """Wrapper for CallbackList instance.
-  
+
   Before tensorflow2.2 progress bar is implemented separetely.
   In tensorflow 2.2 the progbar callback could be taken care of
   within the `CallbackList` instance. Currently, it is implemented
@@ -165,6 +170,13 @@ class CallbackListWrapper(cbks.CallbackList):
     if self.progbar is not None:
       self.progbar.on_train_begin()
 
+    # exchange on the beginning of training so we could log
+    # initial state hyperparameter state of each replica.
+    if mode == ModeKeys.TRAIN:
+      for callback in self.callbacks:
+        if isinstance(callback, BaseExchangeCallback):
+          callback.exchange()
+
   def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
     if hook_name == 'begin':
       return self._on_epoch_begin(epoch, epoch_logs, mode=mode)
@@ -190,6 +202,14 @@ class CallbackListWrapper(cbks.CallbackList):
       if hook_name == 'begin':
         self.progbar.on_batch_begin(batch_index, batch_logs)
       elif hook_name == 'end':
+        # increment global step during train mode
+        if mode == ModeKeys.TRAIN:
+          self.model.global_step += 1
+          # attempt exchanges
+          for callback in self.callbacks:
+            if (isinstance(callback, BaseExchangeCallback)
+                and callback.should_exchange()):
+              callback.exchange()
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
@@ -201,17 +221,57 @@ class CallbackListWrapper(cbks.CallbackList):
       del test_progbar
     super()._call_end_hook(mode)
 
-class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
-  def __init__(self, swap_step, burn_in=None):
-    super(BaseHPExchangeCallback, self).__init__()
+    # Attach exchange logs to the HistoryCallback.
+    # Assuming there only one Exchange callback
+    for callback in self.callbacks:
+      if isinstance(callback, BaseExchangeCallback):
+        self.model.history.exchange_history = callback.exchange_logs
+        break
+    
+
+class BaseExchangeCallback(tf.keras.callbacks.Callback):
+  def __init__(self, exchange_data, swap_step, burn_in=None):
+    super(BaseExchangeCallback, self).__init__()
+    self.exchange_data = exchange_data
     self.swap_step = swap_step
     self.burn_in = burn_in or 1
 
-  @property
+  def evaluate_metrics(self):
+    """Evaluates losses and metrics on exchange dataset."""
+    x, y = self.exchange_data
+    metrics = self.model.evaluate(x, y, verbose=0)
+    return metrics
+
+  def evaluate_exchange_losses(self):
+    """Evaluates losses on exchange dataset."""
+    metrics = self.evaluate_metrics()
+    return metrics[:self.model.n_replicas]
+
+  def log_exchange_metrics(self, losses, **kwargs):
+    exchange_logs = (getattr(self, 'exchange_logs', None)
+                     or _init_exchange_logs(self, kwargs))
+
+    # log losses
+    losses_names = self.model.metrics_names[:self.model.n_replicas]
+    for i, loss_name in enumerate(losses_names):
+      exchange_logs[loss_name].append(losses[i])
+
+    # log the rest of the metrics (in kwargs)
+    for k, v in kwargs.items():
+      exchange_logs[k].append(v)
+
+    # log hyper parameters
+    for i in range(self.model.n_replicas):
+      for name in self.model.hpspace.hyperparameters_names:
+        exchange_logs[i][name].append(self.model.hpspace.hpspace[i][name])
+
+    # log global step
+    exchange_logs['step'].append(self.model.global_step)
+
   def should_exchange(self):
     global_step = self.model.global_step
-    return (global_step > self.burn_in
-        and self.swap_step % global_step == 0)
+    return (global_step >= self.burn_in
+            and global_step % self.swap_step == 0)
 
   @property
   def ordered_hyperparams(self):
@@ -247,13 +307,19 @@ class BaseHPExchangeCallback(tf.keras.callbacks.Callback):
         break
     return int(str(index_level) + ''.join(reversed(indices)))
 
-class MetropolisExchangeCallback(BaseHPExchangeCallback):
+class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, swap_step, burn_in=None):
-    super(MetropolisExchangeCallback, self).__init__(swap_step, burn_in)
+  def __init__(self, exchange_data, swap_step, burn_in=None):
+    super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
 
+  def exchange(self, hpname=None, exchange_pair=None, coeff=1.):
+    """Exchanges hyperparameters between adjacent replicas.
 
-  def exchange(self, losses, hpname=None, exchange_pair=None, coeff=1.):
+    This function is called once on the beginning of training to
+    log initial values of hyperparameters and then it is called
+    every `swap_step` steps.
+    """
+    losses = self.evaluate_exchange_losses()
     hp = self.ordered_hyperparams
     n_replicas = self.model.n_replicas
     # pick random hyperparameter to exchange
@@ -279,4 +345,29 @@ class MetropolisExchangeCallback(BaseHPExchangeCallback):
         coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
 
     if np.random.uniform() < proba:
+      swaped = 1
       self.model.hpspace.swap_between(i, j, hpname)
+    else:
+      swaped = 0
+
+    super().log_exchange_metrics(losses, proba=proba, hpname=hpname, swaped=swaped)
+
+def _init_exchange_logs(callback, metrics_dict=None):
+  """Initializes `dict` that stores logs from replica exchanges."""
+  metrics_dict = metrics_dict or {}
+  hpspace = callback.model.hpspace
+  logs_names = hpspace.hyperparameters_names
+  result = {
+      i: {name: [] for name in logs_names}
+      for i in range(callback.model.n_replicas)
+  }
+  result.update({m: [] for m in metrics_dict})
+  # add losses
+  losses_names = callback.model.metrics_names[:callback.model.n_replicas]
+  result.update({loss_name: [] for loss_name in losses_names})
+
+  # global step
+  result['step'] = []
+
+  callback.exchange_logs = result
+  return result
