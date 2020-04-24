@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 
 from deep_tempering import training_utils as utils
@@ -21,6 +23,7 @@ def test_graph_mode_iterator():
     i += batch_size
 
 def test_numpy_iterator():
+  # test without shuffling
   data_size = 10
   x_data = np.random.normal(0, 1, size=(data_size, 1))
   y_data = np.arange(data_size)
@@ -36,6 +39,66 @@ def test_numpy_iterator():
         i = 0
     assert np.all(y == y_data[i: i + batch_size])
     i += batch_size
+
+  # test with shuffling, data_size mod batch_size = 0
+  data_size = 16
+  batch_size = 8
+  x_data = np.random.normal(0, 1, size=(16, 1))
+  y_data = np.arange(16)
+
+  x_data2 = copy.deepcopy(x_data)
+  y_data2 = copy.deepcopy(y_data)
+
+  iterable = utils.DataIterable(x_data2,
+                                y_data2,
+                                batch_size=8,
+                                shuffle=True,
+                                epochs=1)
+  result_x, result_y = [], []
+
+  for (x, y) in iterable:
+      result_x.append(x)
+      result_y.append(y)
+
+  result_x = list(np.concatenate(result_x, 0))
+  result_y = list(np.concatenate(result_y, 0))
+
+  sorted_y, sorted_x = zip(*sorted(zip(result_y, result_x)))
+
+  np.testing.assert_almost_equal(x_data, sorted_x)
+  np.testing.assert_almost_equal(y_data, sorted_y)
+
+  # test with shuffling, data_size mod batch_size != 0
+  data_size = 37
+  batch_size = 8
+  x_data = np.random.normal(0, 1, size=(16, 1))
+  y_data = np.arange(16)
+
+  x_data2 = copy.deepcopy(x_data)
+  y_data2 = copy.deepcopy(y_data)
+
+  iterable = utils.DataIterable(x_data2,
+                                y_data2,
+                                batch_size=8,
+                                shuffle=True,
+                                epochs=1)
+  result_x, result_y = [], []
+
+  for (x, y) in iterable:
+      result_x.append(x)
+      result_y.append(y)
+
+  result_x = list(np.concatenate(result_x, 0))
+  result_y = list(np.concatenate(result_y, 0))
+
+  sorted_y, sorted_x = zip(*sorted(zip(result_y, result_x)))
+  sorted_y = np.array(sorted_y)
+  sorted_x = np.vstack(sorted_x)
+
+  np.testing.assert_almost_equal(x_data, sorted_x)
+  np.testing.assert_almost_equal(y_data, sorted_y)
+
+
 
 def test_prepare_data_iterables():
   data_size = 10

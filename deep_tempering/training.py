@@ -53,7 +53,7 @@ class HPSpaceState:
     # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
     #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
     #  2: {'learning_rate': 0.01, 'dropout_rate': 0.6}}
-    ```
+    ```jjj
     """
     self.ensemble_model = ensemble_model
     hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())
@@ -85,6 +85,7 @@ class HPSpaceState:
 
     n_replicas = len(self.hpspace)
     hpnames = list(self.hpspace[0].keys())
+
     current_hp_dict = {
         name: dict(self.get_ordered_hparams(name))
         for name in hpnames
@@ -98,14 +99,16 @@ class HPSpaceState:
 
     for i in range(n_replicas):
       for hpname in hpnames:
-        if not training and hpname.startswith('dropout_rate'):
+        if not training and 'dropout_rate' in hpname:
           value = 0.
         else:
           value = current_hp_dict[hpname][i]
         placeholder = hpstates[i]._get_hparam(hpname)
 
         assert placeholder is not None
-        feed_dict[placeholder] = current_hp_dict[hpname][i]
+        feed_dict[placeholder] = value
+    #print('\n', training, [(k.name, v) for k, v in feed_dict.items()])
+
 
     return feed_dict
 
