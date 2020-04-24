@@ -15,7 +15,6 @@ def test_configure_callbacks():
   n_replicas = 6
   model.compile(optimizer, loss, n_replicas)
 
-
   hparams_dict = {
         'learning_rate': np.linspace(0.001, 0.01, n_replicas),
         'dropout_rate': np.linspace(0., 0.6, n_replicas)
@@ -36,22 +35,23 @@ def test_configure_callbacks():
   kwargs['steps'] = (kwargs['steps_per_epoch'], kwargs.pop('steps_per_epoch'))[0]
 
   # test that params are stored as intended
-
   assert kwargs == callbacklist.params
 
 def test_base_hp_exchange_callback():
   tf.compat.v1.keras.backend.clear_session()
   em = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
-  loss = 'sparse_categorical_crossentropy'
+  loss = 'binary_crossentropy'
   n_replicas = 6
   em.compile(optimizer, loss, n_replicas)
   hparams_dict = {
         'learning_rate': np.linspace(0.001, 0.01, n_replicas),
         'dropout_rate': np.linspace(0., 0.6, n_replicas)
-    }
+  }
   hpss = training.HPSpaceState(em, hparams_dict)
-  clb = cbks.BaseHPExchangeCallback(swap_step=10)
+  x = np.random.normal(0, 2, (18, 2))
+  y = np.random.randint(0, 2, (18, 1))
+  clb = cbks.BaseExchangeCallback((x, y), swap_step=10)
   clb.model = em
 
   # test get_ordered_losses() and _metrics_sorting_key()
@@ -67,18 +67,18 @@ def test_base_hp_exchange_callback():
   # test should_exchange property
   em.global_step = 10
   assert clb.should_exchange
-  
+
   em.global_step = 9
-  assert not clb.should_exchange 
+  assert not clb.should_exchange()
 
 def test_metropolis_callback():
   tf.compat.v1.keras.backend.clear_session()
   em = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
-  loss = 'sparse_categorical_crossentropy'
+  loss = 'binary_crossentropy'
   n_replicas = 10
   em.compile(optimizer, loss, n_replicas)
-
+  em.global_step = 0
   hparams_dict = {
         'learning_rate': np.linspace(0.001, 0.01, n_replicas),
         'dropout_rate': np.linspace(0.05, 0.6, n_replicas)
@@ -86,8 +86,9 @@ def test_metropolis_callback():
 
   hpspace = training.HPSpaceState(em, hparams_dict)
 
-
-  clb = cbks.MetropolisExchangeCallback(swap_step=10)
+  x = np.random.normal(0, 0.2, (18, 2))
+  y = np.random.randint(0, 2, (18, 1))
+  clb = cbks.MetropolisExchangeCallback((x, y), swap_step=10)
   clb.model = em
   em._hp_state_space = hpspace
 
@@ -104,5 +105,5 @@ def test_metropolis_callback():
   # (beta_i - beta_j) < 0 and losses[i] - losses[j] = 0.8 - 0.9 < 0
   # and exp((beta_i - beta_j) * (losses[i] - losses[j])) > 1
   exchange_pair = 9
-  clb.exchange(losses, hpname=hpname, exchange_pair=exchange_pair)
+  clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
   assert hpspace.hpspace == expected

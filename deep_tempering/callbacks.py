@@ -9,7 +9,7 @@ from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 
-make_logs = functools.partial(cbks.make_logs)
+make_logs = cbks.make_logs
 
 def get_progbar(model):
   """Get Progbar."""
@@ -147,6 +147,9 @@ class CallbackListWrapper(cbks.CallbackList):
   within the `CallbackList` instance. Currently, it is implemented
   separately. See the following commit for more:
   https://github.com/tensorflow/tensorflow/commit/10666c59dd4858645d1b03ce01f4450da80710ec
+
+  For details about the functions overriden here see
+  `tf.keras.callbacks.CallbackList`.
   """
   def __init__(self, *args, **kwargs):
     super(CallbackListWrapper, self).__init__(*args, **kwargs)
@@ -154,11 +157,13 @@ class CallbackListWrapper(cbks.CallbackList):
     self._train_progbar = None
   
   def set_progbar(self, progbar, verbose=0):
+    """Sets progress bar."""
     self.progbar = progbar
     self.progbar.params = self.params
     self.progbar.params['verbose'] = verbose
 
-  def set_test_progbar(self, progbar, verbose):
+  def set_test_progbar(self, progbar, verbose=0):
+    """Sets testing progress bar without losing ref for training one."""
     if self.progbar is not None:
       self._train_progbar = self.progbar
       self.progbar = progbar
@@ -213,16 +218,19 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
-    # Remove test progbar if was created. Set train progress bar
-    # if it was previously existed.
+    
+    # 
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
       del test_progbar
+
     super()._call_end_hook(mode)
 
     # Attach exchange logs to the HistoryCallback.
-    # Assuming there only one Exchange callback
+    # Assuming there only one Exchange callback.
+    # In case of multiple exchange callbacks they could be accessed
+    # through exchange callbacks themselfs.
     for callback in self.callbacks:
       if isinstance(callback, BaseExchangeCallback):
         self.model.history.exchange_history = callback.exchange_logs
@@ -230,7 +238,21 @@ class CallbackListWrapper(cbks.CallbackList):
     
 
 class BaseExchangeCallback(tf.keras.callbacks.Callback):
+  """Base class for exchanges.
+  
+  You never use this class directly, but instead instantiate one of
+  its subclasses such as `dt.callbacks.MetropolisExchangeCallback`.
+  
+  """
   def __init__(self, exchange_data, swap_step, burn_in=None):
+    """Initializes a new `BaseExchangeCallback` instance.
+
+    Args:
+      exchange_data: A list or tuple of (x, y) data (same structure
+        as `validation_data` argument in `keras.model.fit()`.)
+      swap_step: A step at wich the exchange is performed.
+      burn_in: As step before which the exchanges are not perfomed.
+    """
     super(BaseExchangeCallback, self).__init__()
     self.exchange_data = exchange_data
     self.swap_step = swap_step
@@ -248,6 +270,12 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     return metrics[:self.model.n_replicas]
 
   def log_exchange_metrics(self, losses, **kwargs):
+    """Logs metrics related to exchanges.
+
+    Args:
+      losses: A list of exchange losses.
+      kwargs: Any metric that user wishes to log.
+    """
     exchange_logs = (getattr(self, 'exchange_logs', None)
                      or _init_exchange_logs(self, kwargs))
 
@@ -269,9 +297,20 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     exchange_logs['step'].append(self.model.global_step)
 
   def should_exchange(self):
+    """Whether to exchange based on swap step and burn in period."""
     global_step = self.model.global_step
     return (global_step >= self.burn_in
             and global_step % self.swap_step == 0)
+
+  def exchange(self):
+    """This method must be implemented in subclasses.
+
+    This function is called once on the beginning of training to
+    log initial values of hyperparameters and then it is called
+    every `swap_step` steps.
+    """
+    raise NotImplementedError()
+
 
   @property
   def ordered_hyperparams(self):
@@ -296,7 +335,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     """
     splitted = metric_name.split('_')
     # `index_level` is the level of underscore indices in the metric name
-    # For example, `index_level` of `loss_1_2` is 2. 
+    # For example, `index_level` of `loss_1_2` is 2.
     index_level = 0
     indices = []
     for item in reversed(splitted):
@@ -312,22 +351,24 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
   def __init__(self, exchange_data, swap_step, burn_in=None):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
 
-  def exchange(self, hpname=None, exchange_pair=None, coeff=1.):
+  def exchange(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
 
     This function is called once on the beginning of training to
     log initial values of hyperparameters and then it is called
     every `swap_step` steps.
     """
-    losses = self.evaluate_exchange_losses()
-    hp = self.ordered_hyperparams
-    n_replicas = self.model.n_replicas
     # pick random hyperparameter to exchange
-    hpname = hpname or random.choice(list(hp.keys()))
+    hp = self.ordered_hyperparams
+    hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
+    # pick random replica pair to exchange
+    n_replicas = self.model.n_replicas
+    exchange_pair = kwargs.get('exchange_pair', np.random.randint(1, n_replicas))
+    coeff = kwargs.get('coeff', 1.)
+    losses = self.evaluate_exchange_losses()
+
     hyperparams = [h[1] for h in hp[hpname]]
 
-    # pick random replica pair to exchange
-    exchange_pair = exchange_pair or np.random.randint(1, n_replicas)
     i = exchange_pair
     j = exchange_pair - 1
 
@@ -350,7 +391,8 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     else:
       swaped = 0
 
-    super().log_exchange_metrics(losses, proba=proba, hpname=hpname, swaped=swaped)
+    super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
+                                 swaped=swaped)
 
 def _init_exchange_logs(callback, metrics_dict=None):
   """Initializes `dict` that stores logs from replica exchanges."""
