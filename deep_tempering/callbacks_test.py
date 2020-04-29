@@ -48,7 +48,7 @@ def test_base_hp_exchange_callback():
         'learning_rate': np.linspace(0.001, 0.01, n_replicas),
         'dropout_rate': np.linspace(0., 0.6, n_replicas)
   }
-  hpss = training.HPSpaceState(em, hparams_dict)
+  hpss = training.HyperParamSpace(em, hparams_dict)
   x = np.random.normal(0, 2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
   clb = cbks.BaseExchangeCallback((x, y), swap_step=10)
@@ -84,7 +84,7 @@ def test_metropolis_callback():
         'dropout_rate': np.linspace(0.05, 0.6, n_replicas)
   }
 
-  hpspace = training.HPSpaceState(em, hparams_dict)
+  hpspace = training.HyperParamSpace(em, hparams_dict)
 
   x = np.random.normal(0, 0.2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))

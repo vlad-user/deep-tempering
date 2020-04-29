@@ -17,7 +17,7 @@ def test_hp_space_state():
           'learning_rate': np.linspace(0.001, 0.01, n_replicas),
           'dropout_rate': np.linspace(0., 0.6, n_replicas)
       }
-  hpss = training.HPSpaceState(em, hparams_dict)
+  hpss = training.HyperParamSpace(em, hparams_dict)
 
   # test that initial hyper-parameter values are correct
   initial_values = {
@@ -108,7 +108,7 @@ def test_model_iteration():
 
   history = model.fit(x,
                       y_train,
-                      exchange_hparams=hp,
+                      hyper_params=hp,
                       epochs=epochs,
                       batch_size=batch_size,
                       validation_data=validation_data,
@@ -164,7 +164,7 @@ def test_model_iteration():
 
   history = model.fit(x,
                       y_train,
-                      exchange_hparams=hp,
+                      hyper_params=hp,
                       epochs=epochs,
                       batch_size=batch_size,
                       validation_data=validation_data,
@@ -264,7 +264,7 @@ def test_metrics_and_losses():
     }
     hist2 = em.fit(x_data,
                    y_data,
-                   exchange_hparams=hp,
+                   hyper_params=hp,
                    epochs=epochs,
                    batch_size=batch_size,
                    shuffle=False,
@@ -327,10 +327,10 @@ def test_pt_ensemble():
   # all args are `None`
   optimizers = [None]
   losses = [None]
-  exchange_hparams = [None]
+  hyper_params = [None]
   errors = [ValueError]
 
-  zipped = zip(optimizers, losses, exchange_hparams, errors)
+  zipped = zip(optimizers, losses, hyper_params, errors)
   for optimizer, loss, hp, error in zipped:
     with pytest.raises(error):
       ensemble.compile(optimizer, loss, n_replicas=2)
@@ -345,4 +345,4 @@ def test_pt_ensemble():
       'learning_rate': [0.0 , 0.03],
       'dropout_rate': [0.0, 0.1]
   }
-  return ensemble.fit(x, y, exchange_hparams=hp, epochs=3, batch_size=2)
+  return ensemble.fit(x, y, hyper_params=hp, epochs=3, batch_size=2)
