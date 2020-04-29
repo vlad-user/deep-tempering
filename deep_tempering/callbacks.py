@@ -24,7 +24,10 @@ def configure_callbacks(callbacks,
                         epochs=None,
                         steps_per_epoch=None,
                         verbose=1,
-                        mode=ModeKeys.TRAIN):
+                        mode=ModeKeys.TRAIN,
+                        exchange_data=None,
+                        swap_step=None,
+                        burn_in=None):
   """Configures callbacks for use in various training loops.
 
   It is just a reimplementation of `set_callback_parameters()`
@@ -60,6 +63,8 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
+    if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
+      callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
   
   callback_list = CallbackListWrapper(callbacks)
@@ -77,7 +82,9 @@ def configure_callbacks(callbacks,
       steps_per_epoch=steps_per_epoch,
       samples=samples,
       verbose=verbose,
-      mode=mode)
+      mode=mode,
+      swap_step=swap_step,
+      burn_in=burn_in)
 
   callback_list.model.stop_training = False
   if verbose:
@@ -100,7 +107,9 @@ def set_callback_parameters(callback_list,
                             steps_per_epoch=None,
                             samples=None,
                             verbose=1,
-                            mode=ModeKeys.TRAIN):
+                            mode=ModeKeys.TRAIN,
+                            swap_step=None,
+                            burn_in=None):
   """Sets callback parameters.
 
   Args:
@@ -135,6 +144,8 @@ def set_callback_parameters(callback_list,
       'verbose': verbose,
       'do_validation': do_validation,
       'metrics': callback_metrics,
+      'swap_step': swap_step,
+      'burn_in': burn_in
   }
   callback_list.set_params(callback_params)
 
@@ -233,9 +244,8 @@ class CallbackListWrapper(cbks.CallbackList):
     # through exchange callbacks themselfs.
     for callback in self.callbacks:
       if isinstance(callback, BaseExchangeCallback):
-        self.model.history.exchange_history = callback.exchange_logs
+        self.model.history.exchange_history = getattr(callback, 'exchange_logs', None)
         break
-    
 
 class BaseExchangeCallback(tf.keras.callbacks.Callback):
   """Base class for exchanges.
@@ -257,15 +267,20 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     self.exchange_data = exchange_data
     self.swap_step = swap_step
     self.burn_in = burn_in or 1
+    self.exchangable = swap_step is not None and exchange_data is not None
 
   def evaluate_metrics(self):
     """Evaluates losses and metrics on exchange dataset."""
+    if not self.exchangable:
+      return []
     x, y = self.exchange_data
     metrics = self.model.evaluate(x, y, verbose=0)
     return metrics
 
   def evaluate_exchange_losses(self):
     """Evaluates losses on exchange dataset."""
+    if not self.exchangable:
+      return []
     metrics = self.evaluate_metrics()
     return metrics[:self.model.n_replicas]
 
@@ -300,6 +315,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     """Whether to exchange based on swap step and burn in period."""
     global_step = self.model.global_step
     return (global_step >= self.burn_in
+            and self.swap_step is not None
             and global_step % self.swap_step == 0)
 
   def exchange(self):
@@ -359,6 +375,8 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     every `swap_step` steps.
     """
     # pick random hyperparameter to exchange
+    if not self.exchangable:
+      return
     hp = self.ordered_hyperparams
     hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
     # pick random replica pair to exchange

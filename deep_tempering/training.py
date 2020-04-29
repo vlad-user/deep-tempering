@@ -382,12 +382,16 @@ class EnsembleModel:
           hyper_params,
           validation_split=0.0,
           validation_data=None,
+          exchange_split=0.0,
+          exchange_data=None,
           batch_size=2,
           epochs=1,
           shuffle=True,
           validation_freq=1,
           verbose=1,
-          callbacks=None):
+          callbacks=None,
+          swap_step=None,
+          burn_in=None):
     
     if self._hp_state_space is None:
       self._hp_state_space = HyperParamSpace(self, hyper_params)
@@ -405,12 +409,16 @@ class EnsembleModel:
                            y,
                            validation_split=validation_split,
                            validation_data=validation_data,
+                           exchange_data=exchange_data,
+                           exchange_split=exchange_split,
                            validation_freq=validation_freq,
                            batch_size=batch_size,
                            epochs=epochs,
                            callbacks=callbacks,
                            shuffle=shuffle,
-                           verbose=verbose)
+                           verbose=verbose,
+                           burn_in=burn_in,
+                           swap_step=swap_step)
 
   def evaluate(self,
                x=None,
@@ -613,7 +621,9 @@ def model_iteration(model,
                     exchange_split=0.0,
                     validation_freq=1,
                     random_data_split_state=0,
-                    mode=ModeKeys.TRAIN):
+                    mode=ModeKeys.TRAIN,
+                    swap_step=None,
+                    burn_in=None):
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
   Args:
     model: `EnsembleModel` instance.
@@ -671,15 +681,6 @@ def model_iteration(model,
     train_dataset, test_dataset, exchange_data = datasets
     val_samples_or_steps = len(test_dataset)
 
-  # val_samples_or_steps =  None
-  # if len(datasets) == 1:
-  #   do_validation = False
-  #   train_dataset = datasets[0]
-  # elif len(datasets) == 2:
-  #   do_validation = True
-  #   train_dataset, test_dataset = datasets
-  #   val_samples_or_steps = len(test_dataset)
-
   num_samples_or_steps = len(train_dataset)
 
   f = _make_execution_function(model, mode)
@@ -699,7 +700,6 @@ def model_iteration(model,
                       replicas=model.n_replicas,
                       increment='samples')
 
-
   # Configure callbacks
   callbacks = cbks.configure_callbacks(
       callbacks,
@@ -710,7 +710,9 @@ def model_iteration(model,
       epochs=epochs,
       verbose=verbose,
       mode=mode,
-      exchange_data=exchange_data)
+      exchange_data=exchange_data,
+      swap_step=swap_step,
+      burn_in=burn_in)
 
   callbacks.model.stop_training = False
   callbacks._call_begin_hook(mode)

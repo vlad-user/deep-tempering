@@ -25,7 +25,9 @@ def test_configure_callbacks():
       'epochs': 2,
       'steps_per_epoch': None,
       'samples': None,
-      'verbose': 1
+      'verbose': 1,
+      'burn_in': None,
+      'swap_step': None
   }
   callbacklist = cbks.configure_callbacks([], model, **kwargs)
   kwargs.update({
