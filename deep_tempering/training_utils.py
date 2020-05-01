@@ -94,34 +94,49 @@ def prepare_data_iterables(x,
                            y=None,
                            validation_split=0.0,
                            validation_data=None,
+                           exchange_split=0.0,
+                           exchange_data=None,
                            batch_size=32,
                            epochs=1,
                            shuffle=True,
                            random_state=0):
-
+  
+  # during testing DataIterable is passed
   if isinstance(x, DataIterable):
-    return [x]
+    return x
 
-  if validation_split == 0.0 and validation_data is None:
-    return [DataIterable(x, y, batch_size, epochs, shuffle)]
+  # predict mode
+  if y is None:
+    return DataIterable(x, y, batch_size, epochs, shuffle)
 
-  elif validation_split == 0.0 and validation_data is not None:
-    train_dataset = DataIterable(x, y, batch_size, epochs, shuffle)
-    test_dataset = DataIterable(validation_data[0],
-                                validation_data[1],
-                                batch_size,
-                                epochs,
-                                shuffle)
-    return [train_dataset, test_dataset]
+  train_data, validation_data, exchange_data = (
+      _train_validation_exchange_data((x, y), validation_data=validation_data,
+          exchange_data=exchange_data, validation_split=validation_split,
+          exchange_split=exchange_split))
 
-  elif  0.0 < validation_split < 1:
-    x_train, x_test, y_train, y_test = train_test_split(x, y,
-        test_size=validation_split, random_state=random_state)
-    train_dataset = DataIterable(x_train, y_train, batch_size, epochs, shuffle)
-    test_dataset = DataIterable(x_test, y_test, batch_size, epochs, shuffle)
-    return [train_dataset, test_dataset]
+  train_iterable = DataIterable(train_data[0], train_data[1],
+                                batch_size=batch_size, epochs=epochs,
+                                shuffle=shuffle)
+  if validation_data is not None:
+    validation_iterable = DataIterable(validation_data[0], validation_data[1],
+                                       batch_size=batch_size, epochs=epochs,
+                                       shuffle=shuffle)
   else:
-    raise ValueError('Cannot parition data.')
+    validation_iterable = None
+
+  # exchange data is passed as is
+
+  return (train_iterable, validation_iterable, exchange_data)
+
+
+  # elif  0.0 < validation_split < 1:
+  #   x_train, x_test, y_train, y_test = train_test_split(x, y,
+  #       test_size=validation_split, random_state=random_state)
+  #   train_dataset = DataIterable(x_train, y_train, batch_size, epochs, shuffle)
+  #   test_dataset = DataIterable(x_test, y_test, batch_size, epochs, shuffle)
+  #   return [train_dataset, test_dataset]
+  # else:
+  #   raise ValueError('Cannot parition data.')
 
 def _validate_dataset_shapes(*args):
   shapes = []
@@ -250,7 +265,7 @@ class GraphModeDataIterable:
     return self.__len
 
 def arrays_datadict_shuffle(datadict):
-
+  """Shuffles all values in `dict` in unison."""
   indices = np.arange(datadict['x'].shape[0])
   np.random.shuffle(indices)
 
@@ -258,3 +273,56 @@ def arrays_datadict_shuffle(datadict):
       k: np.take(v, indices=indices, axis=0) if v is not None else v
       for k, v in datadict.items()
   }
+
+def _train_validation_exchange_data(train_data,
+                                    validation_data=None,
+                                    exchange_data=None,
+                                    validation_split=0.0,
+                                    exchange_split=0.0,
+                                    random_state=0,
+                                    verbose=0):
+  """Extracts exchange data.
+  Extraction of the exchanges dataset is done in the following order:
+
+  * If exchange data is passes explicitly, then use this data.
+  * Else If `exchange_split` is non-zero sample randomly out of train
+  * Else If validation data is passed explicitly, then use this data.
+    data.
+  * Else raise `ValueError
+  """
+  # validate train data
+
+  assert all(isinstance(a, np.ndarray) for a in train_data)
+
+  x_train, y_train = train_data
+
+  # extract validation data
+  if validation_data is not None:
+    validation_data = validation_data
+  elif validation_split > 0.0:
+    x_train, x_validation, y_train, y_validation = train_test_split(
+        x_train, y_train, random_state=0, test_size=validation_split)
+    validation_data = (x_validation, y_validation)
+
+  # extract exchange data
+  if exchange_data is not None:
+    # exchange data is passed explicitly
+    exchange_data = exchange_data
+  elif exchange_split > 0:
+    # exchange data is not passed explicitly, but `exchange_split > 0`
+    x_train, x_exchange, y_train, y_exchange = train_test_split(
+        x_train, y_train, random_state=random_state, test_size=exchange_split)
+    # exchange data is not passed and exchange_split == 0, using validation_data
+    exchange_data = (x_exchange, y_exchange)
+  elif validation_data is not None:
+    exchange_data = validation_data
+
+  # Maybe show as warning?
+  # if exchange_data is None:
+  #   err_msg = ("Unable to extract exchange dataset. Pass exchange dataset "
+  #              "explicitly as argument to `fit()`, or specify "
+  #              "`exchange_split` argument to greater than 0, or "
+  #              "pass validation_data or `validation_split > 0`.")
+  #   raise ValueError(err_msg)
+
+  return (x_train, y_train), validation_data, exchange_data

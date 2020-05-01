@@ -13,7 +13,7 @@ import tqdm
 from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 
-class HPState:
+class HyperParamState:
   def __init__(self):
     self._attrs = {}
 
@@ -35,7 +35,7 @@ class HPState:
     if name in self._attrs:
       return self._attrs[name]
 
-class HPSpaceState:
+class HyperParamSpace:
   """Represents the hyper-parameter state of all replicas.
 
   Serves as container for placeholders and actual values that
@@ -48,7 +48,7 @@ class HPSpaceState:
         'learning_rate': np.linspace(0.001, 0.01, 6),
         'dropout_rate': np.linspace(0., 0.6, 6)
     }
-    hps = HPSpaceState(hparams_dict)
+    hps = HyperParamSpace(hparams_dict)
     hps.hpspace
     # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
     #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
@@ -107,7 +107,6 @@ class HPSpaceState:
 
         assert placeholder is not None
         feed_dict[placeholder] = value
-    #print('\n', training, [(k.name, v) for k, v in feed_dict.items()])
 
 
     return feed_dict
@@ -130,7 +129,7 @@ class EnsembleModel:
     # as dictionary {replica_id: {loss:..., optimizer:..,}}
     self._train_attrs = None
 
-    # HPStateSpace instance could be instantiated only when exchange
+    # HyperParamStateSpace instance could be instantiated only when exchange
     # hyperparameters are known - at `model.fit()`.
     self._hp_state_space = None
 
@@ -184,7 +183,7 @@ class EnsembleModel:
     for i in range(self.n_replicas):
       # build model and the state of hyperparameters
       with tf.variable_scope('model_%d' % i):
-        hp = HPState()
+        hp = HyperParamState()
         train_attrs[i]['hp_state'] = hp
         # Each model has its own input placeholder, meaning that the
         # feed values are fed `n_replica` times. 
@@ -320,6 +319,7 @@ class EnsembleModel:
       raise NotImplementedError()
 
   def _run(self, fetches, feed_dict=None, options=None, run_metadata=None):
+    # TODO: set first session of soft placement configuration
     sess = tf.compat.v1.keras.backend.get_session()
 
     return sess.run(fetches,
@@ -380,18 +380,22 @@ class EnsembleModel:
   def fit(self,
           x,
           y,
-          exchange_hparams,
+          hyper_params,
           validation_split=0.0,
           validation_data=None,
+          exchange_split=0.0,
+          exchange_data=None,
           batch_size=2,
           epochs=1,
           shuffle=True,
           validation_freq=1,
           verbose=1,
-          callbacks=None):
+          callbacks=None,
+          swap_step=None,
+          burn_in=None):
     
     if self._hp_state_space is None:
-      self._hp_state_space = HPSpaceState(self, exchange_hparams)
+      self._hp_state_space = HyperParamSpace(self, hyper_params)
 
     if len(y.shape) == 1:
       y = y[:, None]
@@ -406,12 +410,16 @@ class EnsembleModel:
                            y,
                            validation_split=validation_split,
                            validation_data=validation_data,
+                           exchange_data=exchange_data,
+                           exchange_split=exchange_split,
                            validation_freq=validation_freq,
                            batch_size=batch_size,
                            epochs=epochs,
                            callbacks=callbacks,
                            shuffle=shuffle,
-                           verbose=verbose)
+                           verbose=verbose,
+                           burn_in=burn_in,
+                           swap_step=swap_step)
 
   def evaluate(self,
                x=None,
@@ -576,7 +584,7 @@ class EnsembleModel:
 
 
   def _get_metric_tensors(self, metric_name):
-
+    """Metrics/losses tensors for each replica."""
     try:
       # loss
       result = [self._train_attrs[i][metric_name] for i in range(self.n_replicas)]
@@ -599,33 +607,6 @@ class EnsembleModel:
   def hpspace(self):
     return self._hp_state_space
 
-def _make_execution_function(model, mode):
-  if mode == ModeKeys.TRAIN:
-    return model.train_on_batch
-  elif mode == ModeKeys.TEST:
-    return model.test_on_batch
-  elif mode == ModeKeys.PREDICT:
-    return model.predict_on_batch
-  else:
-    raise ValueError('Unrecognized mode: ', mode)
-
-def _stateful_metrics_names(metrics):
-  stateful_metrics = []
-  for m in metrics:
-    if m in ['accuracy', 'acc']:
-      name = 'acc'
-        
-    elif isinstance(m, tf.keras.metrics.Metric):
-      name = m.name
-    elif callable(m):
-      name = m.__name__
-    else:
-      raise ValueError('unrecognized_metric')
-
-    stateful_metrics.append(name)
-
-  return stateful_metrics
-
 
 def model_iteration(model,
                     inputs,
@@ -635,11 +616,15 @@ def model_iteration(model,
                     verbose=1,
                     callbacks=None,
                     validation_data=None,
+                    exchange_data=None,
                     shuffle=False,
                     validation_split=0.0,
+                    exchange_split=0.0,
                     validation_freq=1,
                     random_data_split_state=0,
-                    mode=ModeKeys.TRAIN):
+                    mode=ModeKeys.TRAIN,
+                    swap_step=None,
+                    burn_in=None):
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
   Args:
     model: `EnsembleModel` instance.
@@ -675,17 +660,28 @@ def model_iteration(model,
     ValueError: in case of invalid arguments.
   """
   datasets = training_utils.prepare_data_iterables(
-      inputs, targets, validation_split, validation_data, batch_size=batch_size,
-      shuffle=shuffle, random_state=random_data_split_state)
+      inputs, targets, validation_split=validation_split,
+      validation_data=validation_data, exchange_data=exchange_data,
+      batch_size=batch_size, shuffle=shuffle, exchange_split=exchange_split,
+      random_state=random_data_split_state)
 
-  val_samples_or_steps =  None
-  if len(datasets) == 1:
+  val_samples_or_steps = None
+  exchange_data = None
+  if (isinstance(datasets, training_utils.DataIterable) or
+      len(datasets) == 3 and datasets[1] is None):
+    # TEST, PREDICT modes or TRAIN mode without validation data
     do_validation = False
-    train_dataset = datasets[0]
+    if isinstance(datasets, training_utils.DataIterable):
+      train_dataset = datasets
+    else:
+      train_dataset = datasets[0]
+      exchange_data = datasets[2]
   else:
+    # TRAIN mode with validation data
     do_validation = True
-    train_dataset, test_dataset = datasets
+    train_dataset, test_dataset, exchange_data = datasets
     val_samples_or_steps = len(test_dataset)
+
   num_samples_or_steps = len(train_dataset)
 
   f = _make_execution_function(model, mode)
@@ -705,7 +701,6 @@ def model_iteration(model,
                       replicas=model.n_replicas,
                       increment='samples')
 
-
   # Configure callbacks
   callbacks = cbks.configure_callbacks(
       callbacks,
@@ -715,7 +710,10 @@ def model_iteration(model,
       samples=num_samples_or_steps,
       epochs=epochs,
       verbose=verbose,
-      mode=mode)
+      mode=mode,
+      exchange_data=exchange_data,
+      swap_step=swap_step,
+      burn_in=burn_in)
 
   callbacks.model.stop_training = False
   callbacks._call_begin_hook(mode)
@@ -808,3 +806,31 @@ def _print_train_info(num_samples_or_steps, val_samples_or_steps, replicas, incr
         val_samples_or_steps, increment=increment)
   msg += '. Ensemble of size {0}.'.format(replicas)
   print(msg)
+
+def _make_execution_function(model, mode):
+  if mode == ModeKeys.TRAIN:
+    return model.train_on_batch
+  elif mode == ModeKeys.TEST:
+    return model.test_on_batch
+  elif mode == ModeKeys.PREDICT:
+    return model.predict_on_batch
+  else:
+    raise ValueError('Unrecognized mode: ', mode)
+
+def _stateful_metrics_names(metrics):
+  stateful_metrics = []
+  for m in metrics:
+    if m in ['accuracy', 'acc']:
+      name = 'acc'
+        
+    elif isinstance(m, tf.keras.metrics.Metric):
+      name = m.name
+    elif callable(m):
+      name = m.__name__
+    else:
+      raise ValueError('unrecognized_metric')
+
+    stateful_metrics.append(name)
+
+  return stateful_metrics
+
