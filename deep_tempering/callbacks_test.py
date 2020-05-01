@@ -171,7 +171,7 @@ def test_all_exchange_callback():
         return cbk
 
   prev_hpspace = copy.deepcopy(model.hpspace.hpspace)
-  
+
   get_first_exchange_callback()._safe_exchange(hpname='dropout_rate',
                                                exchange_pair=3)
   # test that exchange happened
