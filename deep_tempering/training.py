@@ -318,6 +318,16 @@ class EnsembleModel:
     else:
       raise NotImplementedError()
 
+  def optimal_model(self, metric_name='loss'):
+    """Returns best model for metric."""
+    # decide optimal based on argmax or argmin of the metric
+    if 'error' in metric_name:
+      argfn = np.argmin
+    else:
+      argfn = np.argmax
+
+    
+
   def _run(self, fetches, feed_dict=None, options=None, run_metadata=None):
     # TODO: set first session of soft placement configuration
     sess = tf.compat.v1.keras.backend.get_session()

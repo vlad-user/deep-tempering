@@ -166,7 +166,7 @@ class CallbackListWrapper(cbks.CallbackList):
     super(CallbackListWrapper, self).__init__(*args, **kwargs)
     self.progbar = None
     self._train_progbar = None
-  
+
   def set_progbar(self, progbar, verbose=0):
     """Sets progress bar."""
     self.progbar = progbar
@@ -229,8 +229,6 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
-    
-    # 
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
@@ -252,7 +250,6 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   
   You never use this class directly, but instead instantiate one of
   its subclasses such as `dt.callbacks.MetropolisExchangeCallback`.
-  
   """
   def __init__(self, exchange_data, swap_step, burn_in=None):
     """Initializes a new `BaseExchangeCallback` instance.
@@ -347,30 +344,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     return result
 
   def get_ordered_losses(self, logs):
-    all_losses_keys = [l for l in logs.keys() if l.startswith('loss')]
-    all_losses_keys.sort(key=self._metrics_sorting_key)
-    res = [(name, logs[name]) for name in all_losses_keys]
-    return res
-
-  def _metrics_sorting_key(self, metric_name):
-    """Key for sorting indexed metrics names.
-
-    For example, losses indexed with with one index level
-    (loss_1, loss_2, etc) come before losses with two index
-    levels (loss_1_0, loss_1_1).
-    """
-    splitted = metric_name.split('_')
-    # `index_level` is the level of underscore indices in the metric name
-    # For example, `index_level` of `loss_1_2` is 2.
-    index_level = 0
-    indices = []
-    for item in reversed(splitted):
-      if item.isdigit():
-        index_level += 1
-        indices.append(item)
-      else:
-        break
-    return int(str(index_level) + ''.join(reversed(indices)))
+    return get_ordered_metrics(logs, 'loss')
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
@@ -439,3 +413,29 @@ def _init_exchange_logs(callback, metrics_dict=None):
 
   callback.exchange_logs = result
   return result
+
+def _metrics_sorting_key(metric_name):
+  """Key for sorting indexed metrics names.
+
+  For example, losses indexed with with one index level
+  (loss_1, loss_2, etc) come before losses with two index
+  levels (loss_1_0, loss_1_1).
+  """
+  splitted = metric_name.split('_')
+  # `index_level` is the level of underscore indices in the metric name
+  # For example, `index_level` of `loss_1_2` is 2.
+  index_level = 0
+  indices = []
+  for item in reversed(splitted):
+    if item.isdigit():
+      index_level += 1
+      indices.append(item)
+    else:
+      break
+  return int(str(index_level) + ''.join(reversed(indices)))
+
+def get_ordered_metrics(logs, metric_name='loss'):
+  all_losses_keys = [l for l in logs.keys() if l.startswith(metric_name)]
+  all_losses_keys.sort(key=_metrics_sorting_key)
+  res = [(name, logs[name]) for name in all_losses_keys]
+  return res
