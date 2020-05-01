@@ -319,6 +319,7 @@ class EnsembleModel:
       raise NotImplementedError()
 
   def _run(self, fetches, feed_dict=None, options=None, run_metadata=None):
+    # TODO: set first session of soft placement configuration
     sess = tf.compat.v1.keras.backend.get_session()
 
     return sess.run(fetches,

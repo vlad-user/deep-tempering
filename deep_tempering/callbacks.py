@@ -191,7 +191,7 @@ class CallbackListWrapper(cbks.CallbackList):
     if mode == ModeKeys.TRAIN:
       for callback in self.callbacks:
         if isinstance(callback, BaseExchangeCallback):
-          callback.exchange()
+          callback._safe_exchange()
 
   def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
     if hook_name == 'begin':
@@ -225,7 +225,7 @@ class CallbackListWrapper(cbks.CallbackList):
           for callback in self.callbacks:
             if (isinstance(callback, BaseExchangeCallback)
                 and callback.should_exchange()):
-              callback.exchange()
+              callback._safe_exchange()
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
@@ -267,7 +267,10 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     self.exchange_data = exchange_data
     self.swap_step = swap_step
     self.burn_in = burn_in or 1
-    self.exchangable = swap_step is not None and exchange_data is not None
+
+  @property
+  def exchangable(self):
+    return self.swap_step is not None and self.exchange_data is not None
 
   def evaluate_metrics(self):
     """Evaluates losses and metrics on exchange dataset."""
@@ -314,7 +317,8 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   def should_exchange(self):
     """Whether to exchange based on swap step and burn in period."""
     global_step = self.model.global_step
-    return (global_step >= self.burn_in
+    return (self.exchangable
+            and global_step >= self.burn_in
             and self.swap_step is not None
             and global_step % self.swap_step == 0)
 
@@ -326,6 +330,12 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     every `swap_step` steps.
     """
     raise NotImplementedError()
+
+  def _safe_exchange(self, *args, **kwargs):
+    if not self.exchangable:
+      return
+
+    self.exchange(*args, **kwargs)
 
 
   @property
@@ -375,8 +385,6 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     every `swap_step` steps.
     """
     # pick random hyperparameter to exchange
-    if not self.exchangable:
-      return
     hp = self.ordered_hyperparams
     hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
     # pick random replica pair to exchange

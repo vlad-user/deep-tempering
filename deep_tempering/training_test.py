@@ -1,9 +1,12 @@
 import pytest
+import copy
+
 import tensorflow as tf
 import numpy as np
 from sklearn.datasets import make_blobs
 
 from deep_tempering import training
+from deep_tempering import callbacks as cbks
 
 def test_hp_space_state():
   tf.compat.v1.keras.backend.clear_session()
@@ -75,7 +78,8 @@ def model_builder(hp):
 
   return model
 
-def test_model_iteration():
+
+def test_model_iteration_without_exchanges():
   # test that history stores accurate losses
   tf.compat.v1.keras.backend.clear_session()
   model = training.EnsembleModel(model_builder)
@@ -309,7 +313,7 @@ def test_metrics_and_losses():
     assert len(set(precision_1)) == 1
     assert len(set(recall_1)) == 1
     assert len(set(auc_1)) == 1
-    assert len(set(auc_1_1))
+    assert len(set(auc_1_1)) == 1
 
   tf.compat.v1.keras.backend.clear_session()
 

@@ -109,3 +109,77 @@ def test_metropolis_callback():
   exchange_pair = 9
   clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
   assert hpspace.hpspace == expected
+
+def test_all_exchange_callback():
+  # Add testing here when there are multiple exchange callbacks
+
+  # setting up
+  tf.compat.v1.keras.backend.clear_session()
+  model = training.EnsembleModel(model_builder)
+
+  n_replicas = 4
+  optimizer = tf.keras.optimizers.SGD()
+  loss = 'sparse_categorical_crossentropy'
+  model.compile(optimizer, loss, n_replicas)
+  x = np.random.normal(0, 1, (6, 2))
+
+  y_train = np.arange(6).astype('float')
+  y_test = np.arange(6, 12).astype('float')
+  hp = {
+      'learning_rate': [0.01 , 0.02, 0.03, 0.04],
+      'dropout_rate':  [0.1,   0.2,  0.3, 0.4]
+  }
+
+  batch_size = 3
+  epochs = 5
+  do_validation = False
+  validation_data = (x, y_test)
+  callbacks = []
+  samples = 6
+  exchange_data = validation_data
+  swap_step = 2
+  hpss = training.HyperParamSpace(model, hp)
+  model._hp_state_space = hpss
+  # values of losses that train_on_batch/test_on_batch
+  # will return
+  def train_on_batch(x, y):
+    train_losses = [0.16, 0.15, 0.14, 0.13]
+    return train_losses
+
+  def test_on_batch(x, y):
+    test_losses = [0.25, 0.24, 0.23, 0.22]
+    return test_losses
+
+  model.train_on_batch = train_on_batch
+  model.test_on_batch = test_on_batch
+
+  # test that we've added correctly the ExchangeCallback
+  callbacks_list = cbks.configure_callbacks(callbacks,
+                                            model,
+                                            do_validation=do_validation,
+                                            batch_size=batch_size,
+                                            epochs=epochs,
+                                            exchange_data=exchange_data,
+                                            swap_step=swap_step)
+  # callbacks_list has instance of `BaseExchangeCallback`
+  assert any(isinstance(c, cbks.BaseExchangeCallback)
+             for c in callbacks_list.callbacks)
+
+  def get_first_exchange_callback():
+    for cbk in callbacks_list.callbacks:
+      if isinstance(cbk, cbks.BaseExchangeCallback):
+        return cbk
+
+  prev_hpspace = copy.deepcopy(model.hpspace.hpspace)
+  
+  get_first_exchange_callback()._safe_exchange(hpname='dropout_rate',
+                                               exchange_pair=3)
+  # test that exchange happened
+  assert model.hpspace.hpspace[3]['dropout_rate'] == prev_hpspace[2]['dropout_rate']
+
+  get_first_exchange_callback()._safe_exchange(hpname='learning_rate',
+                                               exchange_pair=3)
+  # test that exchange happened
+  assert model.hpspace.hpspace[3] == prev_hpspace[2]
+  assert get_first_exchange_callback().exchange_logs['swaped'] == [1, 1]
+  assert get_first_exchange_callback().exchange_logs['hpname'] == ['dropout_rate', 'learning_rate']
