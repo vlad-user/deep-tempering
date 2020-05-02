@@ -315,6 +315,19 @@ def test_metrics_and_losses():
     assert len(set(auc_1)) == 1
     assert len(set(auc_1_1)) == 1
 
+    # test that the extraction of replica (keras model) that corresponds to the
+    # minimal loss is correct
+    optimal_model = em.optimal_model()
+    sess = tf.compat.v1.keras.backend.get_session()
+    graph = sess.graph
+    optimal_model.compile(optimizer=tf.keras.optimizers.SGD(),
+                          loss='binary_crossentropy')
+
+    optimal_loss = optimal_model.evaluate(x_data, y_data)
+    min_loss = optimal_loss
+    evaluated_losses = em.evaluate(x_data, y_data)[:em.n_replicas]
+    np.testing.assert_almost_equal(min_loss, min(evaluated_losses))
+
   tf.compat.v1.keras.backend.clear_session()
 
 

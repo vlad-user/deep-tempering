@@ -68,7 +68,7 @@ def test_base_hp_exchange_callback():
 
   # test should_exchange property
   em.global_step = 10
-  assert clb.should_exchange
+  assert clb.should_exchange()
 
   em.global_step = 9
   assert not clb.should_exchange()
@@ -107,7 +107,7 @@ def test_metropolis_callback():
   # (beta_i - beta_j) < 0 and losses[i] - losses[j] = 0.8 - 0.9 < 0
   # and exp((beta_i - beta_j) * (losses[i] - losses[j])) > 1
   exchange_pair = 9
-  clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
+  clb.exchange_hyperparams(hpname=hpname, exchange_pair=exchange_pair)
   assert hpspace.hpspace == expected
 
 def test_all_exchange_callback():

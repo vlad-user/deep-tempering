@@ -326,3 +326,18 @@ def _train_validation_exchange_data(train_data,
   #   raise ValueError(err_msg)
 
   return (x_train, y_train), validation_data, exchange_data
+
+def gpu_device_name(replica_id):
+  """Returns a device name on which is replica is going to executed."""
+  if tf.__version__ < '2.1.0':
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+  else:
+    gpus = tf.config.list_physical_devices('GPU')
+
+  gpus_names = [g.name for g in gpus]
+  if not gpus_names:
+    return '/cpu:0'
+
+  return gpus_names[replica_id % len(gpus_names)]
+
+

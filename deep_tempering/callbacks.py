@@ -319,7 +319,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
             and self.swap_step is not None
             and global_step % self.swap_step == 0)
 
-  def exchange(self):
+  def exchange_hyperparams(self):
     """This method must be implemented in subclasses.
 
     This function is called once on the beginning of training to
@@ -332,7 +332,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     if not self.exchangable:
       return
 
-    self.exchange(*args, **kwargs)
+    self.exchange_hyperparams(*args, **kwargs)
 
 
   @property
@@ -351,7 +351,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
   def __init__(self, exchange_data, swap_step, burn_in=None):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
 
-  def exchange(self, **kwargs):
+  def exchange_hyperparams(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
 
     This function is called once on the beginning of training to
