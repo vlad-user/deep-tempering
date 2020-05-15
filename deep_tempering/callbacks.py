@@ -1,13 +1,17 @@
 """Wrappers for Keras' callbacks."""
+import os
 import copy
 import random
 import functools
 import collections
+import json
 
 import tensorflow as tf
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
+
+from deep_tempering import training_utils
 
 make_logs = cbks.make_logs
 
@@ -63,6 +67,8 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
+    if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
+      callbacks += [MonitorOptimalModelCallback()]
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
       callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
@@ -393,6 +399,69 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
 
     super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
                                  swaped=swaped)
+
+
+class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
+  """Monitors optimal keras' model.
+
+  At the end of each epoch stores the optimal keras model based on value
+  we are metric value being monitored.
+  """
+  def __init__(self, monitor='val_loss', path=None, name=None):
+    """Instantiatiates a  new `MonitorOptimalModelCallback` instance.
+
+    Args:
+      monitor: A value of a metric to monitor.
+      path: A directory where to store the otimal model. By default,
+        stores at current working directory in the `.deep_tempering_model`.
+    """
+    self.monitor = monitor
+    self.path = path or training_utils.LOGS_PATH
+    self.name = name or 'optimal_model.h5'
+
+  def on_epoch_end(self, epoch, logs):
+    # get metrics ordered by replica_id
+    monitored_metrics = get_ordered_metrics(logs, self.monitor)
+
+    # if empty there is nothing to monitor, then just return
+    if not monitored_metrics:
+      return
+
+    # add replica id to the the monitored metrics
+    monitored_metrics = [m + (i,) for i, m in enumerate(monitored_metrics)]
+    min_or_max = training_utils.min_or_max_for_metric(self.monitor)
+    if min_or_max == 'min':
+      fn = min
+    else:
+      fn = max
+
+    optimal = fn(monitored_metrics, key=lambda x: x[1])
+    optimal_replica_id = optimal[2]
+    optimal_model = self.model.models[optimal_replica_id]
+    if not os.path.exists(self.path):
+      os.makedirs(self.path)
+    # store weights and hyperparams of the optimal model
+    optimal_model.save_weights(os.path.join(self.path, self.name))
+    with open(os.path.join(self.path, 'hyperparams.json'), 'w') as fo:
+      json.dump(self.model.hpspace.hpspace[optimal_replica_id], fo, indent=2)
+    # print()
+    # print()
+    # import sys
+    # sys.exit()
+
+    # print()
+    # print(optimal_model)
+    # print('optimal', optimal)
+
+    # print(self.monitor)
+    # print(self.path)
+    # print(self.name)
+    # print(epoch)
+    # print(logs)
+    # print()
+    # print(get_ordered_metrics(logs, self.monitor))
+    # import sys
+    # sys.exit()
 
 def _init_exchange_logs(callback, metrics_dict=None):
   """Initializes `dict` that stores logs from replica exchanges."""

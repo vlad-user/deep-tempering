@@ -14,10 +14,13 @@ from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 
 class HyperParamState:
-  def __init__(self):
+  def __init__(self, default_values=None):
     self._attrs = {}
-
+    self.default_values = default_values
   def get_hparam(self, name, default_value=None):
+    if (isinstance(self.default_values, abc.Mapping)
+        and name in self.default_values):
+      return self.default_values[name]
 
     if name in self._attrs:
       raise ValueError('Hyper Params with name ', hp_name, 'already exists.')
@@ -261,6 +264,10 @@ class EnsembleModel:
 
     return names
 
+  @property
+  def models(self):
+    return [self._train_attrs[i]['model'] for i in range(self.n_replicas)]
+
   def predict_on_batch(self, x, y):
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
@@ -343,13 +350,13 @@ class EnsembleModel:
     ordered_metrics = cbks.get_ordered_metrics(logs)
     if len(ordered_metrics) != self.n_replicas:
       raise ValueError('Cannot extract metrics for', metric_name)
-    
+
     optimal_replica_id = argfn([x[1] for x in ordered_metrics])
     return self._train_attrs[optimal_replica_id]['model']
 
 
-
   def _run(self, fetches, feed_dict=None, options=None, run_metadata=None):
+    """Wraps tensorflow session's `run()` method."""
     # TODO: set first session of soft placement configuration
     sess = tf.compat.v1.keras.backend.get_session()
 
@@ -358,12 +365,21 @@ class EnsembleModel:
                     options=options,
                     run_metadata=run_metadata)
 
-  def _build_losses_metrics_optimizer(self, target_tensor_shape):
+  def _build_losses_metrics_optimizer(self, target_ary):
+    """Builds the logic that goes after `logits`.
+
+    This function is invoked once we know the target tensor shape
+    during invocation of `fit()`, `evaluate()` or `predict()`.
+
+    Args:
+      target_ary: Target input data.
+    """
     if not self._is_compiled:
       raise ValueError("model is not compiled. Call compile() method first.")
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
+    target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
     target_tensor = training_utils.create_training_target(target_tensor_shape)
     self._target_tensor = target_tensor
 
@@ -434,8 +450,7 @@ class EnsembleModel:
 
 
     if not self._built_losses_metrics_optimizer:
-      target_tensor_shape = training_utils.infer_shape_from_numpy_array(y)
-      self._build_losses_metrics_optimizer(target_tensor_shape)
+      self._build_losses_metrics_optimizer(y)
 
     return model_iteration(self,
                            x,
@@ -504,8 +519,7 @@ class EnsembleModel:
       y = y[:, None]
 
     if not self._built_losses_metrics_optimizer:
-      target_tensor_shape = training_utils.infer_shape_from_numpy_array(y)
-      self._build_losses_metrics_optimizer(target_tensor_shape)
+      self._build_losses_metrics_optimizer(y)
 
     return model_iteration(self,
                            x,

@@ -1,6 +1,8 @@
+import os
 from collections import abc
 from collections import OrderedDict
 import inspect
+import json
 
 import tensorflow as tf
 import numpy as np
@@ -9,6 +11,7 @@ from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle as sklearn_shuffle
 
+LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
 def call_metric_function(metric_fn,
                          y_true,
@@ -340,4 +343,22 @@ def gpu_device_name(replica_id):
 
   return gpus_names[replica_id % len(gpus_names)]
 
+def min_or_max_for_metric(metric_name):
+  """Decides whether optimal value for `metric_name` is being maximized or minimized"""
+  min_metrics = ['loss', 'error']
+  max_metrics = ['acc', 'accuracy', 'precision', 'recall', 'auc']
+
+  if any(m in metric_name for m in min_metrics):
+    return 'min'
+  elif any(m in metric_name for m in max_metrics):
+    return 'max'
+  else:
+    return 'min'
+
+def load_optimal_model(model_builder, path=None):
+  path = path or LOGS_PATH
+  path = path or os.path.join(LOGS_PATH, 'optimal_model.h5')
+  with open(os.path.join(path, 'hyperparams.json')) as fo:
+    hyperparams = json.load(fo)
+  
 
