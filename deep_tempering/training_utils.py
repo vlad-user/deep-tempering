@@ -13,6 +13,111 @@ from sklearn.utils import shuffle as sklearn_shuffle
 
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
+
+class HyperParamState:
+  def __init__(self, default_values=None):
+    self._attrs = {}
+    self.default_values = default_values
+  def get_hparam(self, name, default_value=None):
+    # during creating of the optimal model default (such
+    # as dropout etc) could be passed.
+    if (isinstance(self.default_values, abc.Mapping)
+        and name in self.default_values):
+      return self.default_values[name]
+
+    if name in self._attrs:
+      raise ValueError('Hyper Params with name ', hp_name, 'already exists.')
+
+    if default_value is None:
+      hp = tf.compat.v1.placeholder(tf.float32, shape=(), name=name)
+    else:
+      hp = tf.compat.v1.placeholder_with_default(default_value,
+                                                 shape=(),
+                                                 name=name)
+    self._attrs[name] = hp
+    return hp
+
+  def _get_hparam(self, name):
+    if name in self._attrs:
+      return self._attrs[name]
+
+class HyperParamSpace:
+  """Represents the hyper-parameter state of all replicas.
+
+  Serves as container for placeholders and actual values that
+  are fed and updated during training.
+  """
+  def __init__(self, ensemble_model, hparams_dict):
+    """Creates a new `HyperParamState` instance.
+    ```python
+    hparams_dict = {
+        'learning_rate': np.linspace(0.001, 0.01, 6),
+        'dropout_rate': np.linspace(0., 0.6, 6)
+    }
+    hps = HyperParamSpace(hparams_dict)
+    hps.hpspace
+    # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
+    #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
+    #  2: {'learning_rate': 0.01, 'dropout_rate': 0.6}}
+    ```jjj
+    """
+    self.ensemble_model = ensemble_model
+    hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())
+    n_replicas = len(hparams_dict[hparams_dict.__iter__().__next__()])
+    self._hyperparameter_names = sorted(list(hparams_dict.keys()))
+    self.n_replicas = n_replicas
+    self.hpspace = {
+        i: {k: v[i] for k, v in hparams_dict.items()}
+        for i in range(n_replicas)
+    }
+
+  @property
+  def hyperparameters_names(self):
+    return self._hyperparameter_names
+
+  def swap_between(self, replica_i, replica_j, hyperparam_name):
+    """Swaps `hyperparam_name` between `replica_i` and `replica_j`."""
+    hp_i = self.hpspace[replica_i][hyperparam_name]
+    hp_j = self.hpspace[replica_j][hyperparam_name]
+    self.hpspace[replica_j][hyperparam_name] = hp_i
+    self.hpspace[replica_i][hyperparam_name] = hp_j
+
+  def get_ordered_hparams(self, name):
+    """Returns list of tuples of adjacent `(replica_id, hp_value)`."""
+    hparams = [(i, self.hpspace[i][name]) for i in range(self.n_replicas)]
+    hparams.sort(key=lambda x: x[1])
+    return hparams
+
+  def prepare_feed_tensors_and_values(self, training=True):
+    # TODO: replace `training` with ModeKeys instance check
+
+    n_replicas = len(self.hpspace)
+    hpnames = list(self.hpspace[0].keys())
+
+    current_hp_dict = {
+        name: dict(self.get_ordered_hparams(name))
+        for name in hpnames
+    }
+
+    hpstates = {
+        i: self.ensemble_model._train_attrs[i]['hp_state']
+        for i in range(n_replicas)
+    }
+    feed_dict = {}
+
+    for i in range(n_replicas):
+      for hpname in hpnames:
+        if not training and 'dropout_rate' in hpname:
+          value = 0.
+        else:
+          value = current_hp_dict[hpname][i]
+        placeholder = hpstates[i]._get_hparam(hpname)
+
+        assert placeholder is not None
+        feed_dict[placeholder] = value
+
+    return feed_dict
+
 def call_metric_function(metric_fn,
                          y_true,
                          y_pred=None,
@@ -355,10 +460,26 @@ def min_or_max_for_metric(metric_name):
   else:
     return 'min'
 
-def load_optimal_model(model_builder, path=None):
+def load_optimal_model(model_builder, hyperparams=None, path=None):
+  """Loads optimal model stored by instance of `MonitorOptimalModelCallback`.
+
+  Args:
+    model_builder: A function that creates a not compiled keras' model.
+    hyperparams: (Optional) A dictionary of hyperparameters (such as dropout)
+      you wish to instantiate your model with. If nothing is specified the
+      model is created with hyperparameters of the optimal model at that time.
+    path: (Optional) A path where the model is stored (in case the model's
+      weights were not stored at the default place).
+  """
   path = path or LOGS_PATH
-  path = path or os.path.join(LOGS_PATH, 'optimal_model.h5')
-  with open(os.path.join(path, 'hyperparams.json')) as fo:
-    hyperparams = json.load(fo)
+  model_weights_path = os.path.join(path, 'optimal_model.h5')
+  if hyperparams is None:
+    with open(os.path.join(path, 'hyperparams.json')) as fo:
+      hyperparams = json.load(fo)
+  hp = HyperParamState(default_values=hyperparams)
+  model = model_builder(hp)
+  model.load_weights(model_weights_path)
+  return model
+
   
 

@@ -13,107 +13,7 @@ import tqdm
 from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 
-class HyperParamState:
-  def __init__(self, default_values=None):
-    self._attrs = {}
-    self.default_values = default_values
-  def get_hparam(self, name, default_value=None):
-    if (isinstance(self.default_values, abc.Mapping)
-        and name in self.default_values):
-      return self.default_values[name]
 
-    if name in self._attrs:
-      raise ValueError('Hyper Params with name ', hp_name, 'already exists.')
-
-    if default_value is None:
-      hp = tf.compat.v1.placeholder(tf.float32, shape=(), name=name)
-    else:
-      hp = tf.compat.v1.placeholder_with_default(default_value,
-                                                 shape=(),
-                                                 name=name)
-    self._attrs[name] = hp
-    return hp
-
-  def _get_hparam(self, name):
-    if name in self._attrs:
-      return self._attrs[name]
-
-class HyperParamSpace:
-  """Represents the hyper-parameter state of all replicas.
-
-  Serves as container for placeholders and actual values that
-  are fed and updated during training.
-  """
-  def __init__(self, ensemble_model, hparams_dict):
-    """Creates a new `HyperParamState` instance.
-    ```python
-    hparams_dict = {
-        'learning_rate': np.linspace(0.001, 0.01, 6),
-        'dropout_rate': np.linspace(0., 0.6, 6)
-    }
-    hps = HyperParamSpace(hparams_dict)
-    hps.hpspace
-    # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
-    #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
-    #  2: {'learning_rate': 0.01, 'dropout_rate': 0.6}}
-    ```jjj
-    """
-    self.ensemble_model = ensemble_model
-    hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())
-    n_replicas = len(hparams_dict[hparams_dict.__iter__().__next__()])
-    self._hyperparameter_names = sorted(list(hparams_dict.keys()))
-    self.n_replicas = n_replicas
-    self.hpspace = {
-        i: {k: v[i] for k, v in hparams_dict.items()}
-        for i in range(n_replicas)
-    }
-
-  @property
-  def hyperparameters_names(self):
-    return self._hyperparameter_names
-
-  def swap_between(self, replica_i, replica_j, hyperparam_name):
-    """Swaps `hyperparam_name` between `replica_i` and `replica_j`."""
-    hp_i = self.hpspace[replica_i][hyperparam_name]
-    hp_j = self.hpspace[replica_j][hyperparam_name]
-    self.hpspace[replica_j][hyperparam_name] = hp_i
-    self.hpspace[replica_i][hyperparam_name] = hp_j
-
-  def get_ordered_hparams(self, name):
-    """Returns list of tuples of adjacent `(replica_id, hp_value)`."""
-    hparams = [(i, self.hpspace[i][name]) for i in range(self.n_replicas)]
-    hparams.sort(key=lambda x: x[1])
-    return hparams
-
-  def prepare_feed_tensors_and_values(self, training=True):
-    # TODO: replace `training` with ModeKeys instance check
-
-    n_replicas = len(self.hpspace)
-    hpnames = list(self.hpspace[0].keys())
-
-    current_hp_dict = {
-        name: dict(self.get_ordered_hparams(name))
-        for name in hpnames
-    }
-
-    hpstates = {
-        i: self.ensemble_model._train_attrs[i]['hp_state']
-        for i in range(n_replicas)
-    }
-    feed_dict = {}
-
-    for i in range(n_replicas):
-      for hpname in hpnames:
-        if not training and 'dropout_rate' in hpname:
-          value = 0.
-        else:
-          value = current_hp_dict[hpname][i]
-        placeholder = hpstates[i]._get_hparam(hpname)
-
-        assert placeholder is not None
-        feed_dict[placeholder] = value
-
-    return feed_dict
 
 class EnsembleModel:
   """Mimics the behaviour of `keras.Model` for ensemble PT training."""
@@ -188,7 +88,7 @@ class EnsembleModel:
       with tf.device(training_utils.gpu_device_name(i)):
         # build model and the state of hyperparameters
         with tf.variable_scope('model_%d' % i):
-          hp = HyperParamState()
+          hp = training_utils.HyperParamState()
           train_attrs[i]['hp_state'] = hp
           # Each model has its own input placeholder, meaning that the
           # feed values are fed `n_replica` times. 
@@ -340,6 +240,9 @@ class EnsembleModel:
     Returns:
       Not compiled keras model.
     """
+    # NOTE: If to remove this function the 
+    # training_test.test_metrics_and_losses() must be modified.
+
     # decide optimal based on argmax or argmin of the metric
     if 'loss' in metric_name or 'error' in metric_name:
       argfn = np.argmin
@@ -443,7 +346,7 @@ class EnsembleModel:
           burn_in=None):
     
     if self._hp_state_space is None:
-      self._hp_state_space = HyperParamSpace(self, hyper_params)
+      self._hp_state_space = training_utils.HyperParamSpace(self, hyper_params)
 
     if len(y.shape) == 1:
       y = y[:, None]

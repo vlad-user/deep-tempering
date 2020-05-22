@@ -405,7 +405,9 @@ class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
   """Monitors optimal keras' model.
 
   At the end of each epoch stores the optimal keras model based on value
-  we are metric value being monitored.
+  we are metric value being monitored. This callback is added automatically
+  if any subclass of this instance is not passed explitly within list
+  of callbacks during `fit()`.
   """
   def __init__(self, monitor='val_loss', path=None, name=None):
     """Instantiatiates a  new `MonitorOptimalModelCallback` instance.
@@ -440,28 +442,12 @@ class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
     optimal_model = self.model.models[optimal_replica_id]
     if not os.path.exists(self.path):
       os.makedirs(self.path)
+
     # store weights and hyperparams of the optimal model
     optimal_model.save_weights(os.path.join(self.path, self.name))
     with open(os.path.join(self.path, 'hyperparams.json'), 'w') as fo:
       json.dump(self.model.hpspace.hpspace[optimal_replica_id], fo, indent=2)
-    # print()
-    # print()
-    # import sys
-    # sys.exit()
 
-    # print()
-    # print(optimal_model)
-    # print('optimal', optimal)
-
-    # print(self.monitor)
-    # print(self.path)
-    # print(self.name)
-    # print(epoch)
-    # print(logs)
-    # print()
-    # print(get_ordered_metrics(logs, self.monitor))
-    # import sys
-    # sys.exit()
 
 def _init_exchange_logs(callback, metrics_dict=None):
   """Initializes `dict` that stores logs from replica exchanges."""
