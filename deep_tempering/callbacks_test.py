@@ -5,6 +5,7 @@ import tensorflow as tf
 import numpy as np
 
 from deep_tempering import training
+from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 from deep_tempering.training_test import model_builder
 
@@ -50,7 +51,7 @@ def test_base_hp_exchange_callback():
         'learning_rate': np.linspace(0.001, 0.01, n_replicas),
         'dropout_rate': np.linspace(0., 0.6, n_replicas)
   }
-  hpss = training.HyperParamSpace(em, hparams_dict)
+  hpss = training_utils.HyperParamSpace(em, hparams_dict)
   x = np.random.normal(0, 2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
   clb = cbks.BaseExchangeCallback((x, y), swap_step=10)
@@ -68,7 +69,7 @@ def test_base_hp_exchange_callback():
 
   # test should_exchange property
   em.global_step = 10
-  assert clb.should_exchange
+  assert clb.should_exchange()
 
   em.global_step = 9
   assert not clb.should_exchange()
@@ -86,7 +87,7 @@ def test_metropolis_callback():
         'dropout_rate': np.linspace(0.05, 0.6, n_replicas)
   }
 
-  hpspace = training.HyperParamSpace(em, hparams_dict)
+  hpspace = training_utils.HyperParamSpace(em, hparams_dict)
 
   x = np.random.normal(0, 0.2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
@@ -107,7 +108,7 @@ def test_metropolis_callback():
   # (beta_i - beta_j) < 0 and losses[i] - losses[j] = 0.8 - 0.9 < 0
   # and exp((beta_i - beta_j) * (losses[i] - losses[j])) > 1
   exchange_pair = 9
-  clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
+  clb.exchange_hyperparams(hpname=hpname, exchange_pair=exchange_pair)
   assert hpspace.hpspace == expected
 
 def test_all_exchange_callback():
@@ -138,7 +139,7 @@ def test_all_exchange_callback():
   samples = 6
   exchange_data = validation_data
   swap_step = 2
-  hpss = training.HyperParamSpace(model, hp)
+  hpss = training_utils.HyperParamSpace(model, hp)
   model._hp_state_space = hpss
   # values of losses that train_on_batch/test_on_batch
   # will return

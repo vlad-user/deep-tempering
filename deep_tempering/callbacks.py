@@ -1,13 +1,17 @@
 """Wrappers for Keras' callbacks."""
+import os
 import copy
 import random
 import functools
 import collections
+import json
 
 import tensorflow as tf
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
+
+from deep_tempering import training_utils
 
 make_logs = cbks.make_logs
 
@@ -63,6 +67,8 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
+    if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
+      callbacks += [MonitorOptimalModelCallback()]
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
       callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
@@ -166,7 +172,7 @@ class CallbackListWrapper(cbks.CallbackList):
     super(CallbackListWrapper, self).__init__(*args, **kwargs)
     self.progbar = None
     self._train_progbar = None
-  
+
   def set_progbar(self, progbar, verbose=0):
     """Sets progress bar."""
     self.progbar = progbar
@@ -229,8 +235,6 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
-    
-    # 
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
@@ -252,7 +256,6 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   
   You never use this class directly, but instead instantiate one of
   its subclasses such as `dt.callbacks.MetropolisExchangeCallback`.
-  
   """
   def __init__(self, exchange_data, swap_step, burn_in=None):
     """Initializes a new `BaseExchangeCallback` instance.
@@ -322,7 +325,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
             and self.swap_step is not None
             and global_step % self.swap_step == 0)
 
-  def exchange(self):
+  def exchange_hyperparams(self):
     """This method must be implemented in subclasses.
 
     This function is called once on the beginning of training to
@@ -335,7 +338,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     if not self.exchangable:
       return
 
-    self.exchange(*args, **kwargs)
+    self.exchange_hyperparams(*args, **kwargs)
 
 
   @property
@@ -347,37 +350,14 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     return result
 
   def get_ordered_losses(self, logs):
-    all_losses_keys = [l for l in logs.keys() if l.startswith('loss')]
-    all_losses_keys.sort(key=self._metrics_sorting_key)
-    res = [(name, logs[name]) for name in all_losses_keys]
-    return res
-
-  def _metrics_sorting_key(self, metric_name):
-    """Key for sorting indexed metrics names.
-
-    For example, losses indexed with with one index level
-    (loss_1, loss_2, etc) come before losses with two index
-    levels (loss_1_0, loss_1_1).
-    """
-    splitted = metric_name.split('_')
-    # `index_level` is the level of underscore indices in the metric name
-    # For example, `index_level` of `loss_1_2` is 2.
-    index_level = 0
-    indices = []
-    for item in reversed(splitted):
-      if item.isdigit():
-        index_level += 1
-        indices.append(item)
-      else:
-        break
-    return int(str(index_level) + ''.join(reversed(indices)))
+    return get_ordered_metrics(logs, 'loss')
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
   def __init__(self, exchange_data, swap_step, burn_in=None):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
 
-  def exchange(self, **kwargs):
+  def exchange_hyperparams(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
 
     This function is called once on the beginning of training to
@@ -420,6 +400,55 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
                                  swaped=swaped)
 
+
+class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
+  """Monitors optimal keras' model.
+
+  At the end of each epoch stores the optimal keras model based on value
+  we are metric value being monitored. This callback is added automatically
+  if any subclass of this instance is not passed explitly within list
+  of callbacks during `fit()`.
+  """
+  def __init__(self, monitor='val_loss', path=None, name=None):
+    """Instantiatiates a  new `MonitorOptimalModelCallback` instance.
+
+    Args:
+      monitor: A value of a metric to monitor.
+      path: A directory where to store the otimal model. By default,
+        stores at current working directory in the `.deep_tempering_model`.
+    """
+    self.monitor = monitor
+    self.path = path or training_utils.LOGS_PATH
+    self.name = name or 'optimal_model.h5'
+
+  def on_epoch_end(self, epoch, logs):
+    # get metrics ordered by replica_id
+    monitored_metrics = get_ordered_metrics(logs, self.monitor)
+
+    # if empty there is nothing to monitor, then just return
+    if not monitored_metrics:
+      return
+
+    # add replica id to the the monitored metrics
+    monitored_metrics = [m + (i,) for i, m in enumerate(monitored_metrics)]
+    min_or_max = training_utils.min_or_max_for_metric(self.monitor)
+    if min_or_max == 'min':
+      fn = min
+    else:
+      fn = max
+
+    optimal = fn(monitored_metrics, key=lambda x: x[1])
+    optimal_replica_id = optimal[2]
+    optimal_model = self.model.models[optimal_replica_id]
+    if not os.path.exists(self.path):
+      os.makedirs(self.path)
+
+    # store weights and hyperparams of the optimal model
+    optimal_model.save_weights(os.path.join(self.path, self.name))
+    with open(os.path.join(self.path, 'hyperparams.json'), 'w') as fo:
+      json.dump(self.model.hpspace.hpspace[optimal_replica_id], fo, indent=2)
+
+
 def _init_exchange_logs(callback, metrics_dict=None):
   """Initializes `dict` that stores logs from replica exchanges."""
   metrics_dict = metrics_dict or {}
@@ -439,3 +468,29 @@ def _init_exchange_logs(callback, metrics_dict=None):
 
   callback.exchange_logs = result
   return result
+
+def _metrics_sorting_key(metric_name):
+  """Key for sorting indexed metrics names.
+
+  For example, losses indexed with with one index level
+  (loss_1, loss_2, etc) come before losses with two index
+  levels (loss_1_0, loss_1_1).
+  """
+  splitted = metric_name.split('_')
+  # `index_level` is the level of underscore indices in the metric name
+  # For example, `index_level` of `loss_1_2` is 2.
+  index_level = 0
+  indices = []
+  for item in reversed(splitted):
+    if item.isdigit():
+      index_level += 1
+      indices.append(item)
+    else:
+      break
+  return int(str(index_level) + ''.join(reversed(indices)))
+
+def get_ordered_metrics(logs, metric_name='loss'):
+  all_losses_keys = [l for l in logs.keys() if l.startswith(metric_name)]
+  all_losses_keys.sort(key=_metrics_sorting_key)
+  res = [(name, logs[name]) for name in all_losses_keys]
+  return res

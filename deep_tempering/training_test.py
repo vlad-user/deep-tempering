@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.datasets import make_blobs
 
 from deep_tempering import training
+from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 
 def test_hp_space_state():
@@ -20,7 +21,7 @@ def test_hp_space_state():
           'learning_rate': np.linspace(0.001, 0.01, n_replicas),
           'dropout_rate': np.linspace(0., 0.6, n_replicas)
       }
-  hpss = training.HyperParamSpace(em, hparams_dict)
+  hpss = training_utils.HyperParamSpace(em, hparams_dict)
 
   # test that initial hyper-parameter values are correct
   initial_values = {
@@ -314,6 +315,19 @@ def test_metrics_and_losses():
     assert len(set(recall_1)) == 1
     assert len(set(auc_1)) == 1
     assert len(set(auc_1_1)) == 1
+
+    # test that the extraction of replica (keras model) that corresponds to the
+    # minimal loss is correct
+    optimal_model = em.optimal_model()
+    sess = tf.compat.v1.keras.backend.get_session()
+    graph = sess.graph
+    optimal_model.compile(optimizer=tf.keras.optimizers.SGD(),
+                          loss='binary_crossentropy')
+
+    optimal_loss = optimal_model.evaluate(x_data, y_data)
+    min_loss = optimal_loss
+    evaluated_losses = em.evaluate(x_data, y_data)[:em.n_replicas]
+    np.testing.assert_almost_equal(min_loss, min(evaluated_losses))
 
   tf.compat.v1.keras.backend.clear_session()
 

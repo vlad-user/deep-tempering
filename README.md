@@ -22,8 +22,8 @@ def model_builder(hp):
 n_replicas = 6
 model = dt.EnsembleModel(model_builder)
 hp = {
-    'learning_rate': np.linspace(0.01, 0.001, n_replicas)
-    'dropout_rate': np.linspce(0, 0.5, n_replicas)
+    'learning_rate': np.linspace(0.01, 0.001, n_replicas),
+    'dropout_rate': np.linspace(0, 0.5, n_replicas)
 }
 
 model.compile(optimizer=tf.keras.optimizers.SGD(),
@@ -36,9 +36,15 @@ y = np.random.randint(0, 2, (10,))
 
 history = model.fit(x,
                     y,
-                    exchange_hparams=hp,
+                    hyper_params=hp,
                     batch_size=2,
                     epochs=2,
                     swap_step=4,
                     burn_in=15)
+
+# access the optimal (not compiled) keras' model instance
+optimal_model = model.optimal_model()
+
+# inference only on the trained optimal model
+predicted = optimal_model.predict(x)
 ```
