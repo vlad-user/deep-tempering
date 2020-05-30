@@ -352,6 +352,53 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   def get_ordered_losses(self, logs):
     return get_ordered_metrics(logs, 'loss')
 
+class PBTExchangeCallback(BaseExchangeCallback):
+  """Exchanges of parameters based on PBT scheduling.
+
+  See: Population Based Training of Neural Networks
+       https://arxiv.org/abs/1711.09846
+  NOTES:
+    * Replica/Worker and Ensemble/Population are used interchangeably
+      in the code and docs.
+    * `exploit()` and `explore()` methods correspond to the ones in the
+      original paper, except that perform the actions for the entire
+      population.
+  """
+
+  def __init__(self, swap_step, burn_in=None):
+    super(PBTExchangeCallback, self).__init__(None, swap_step, burn_in)
+
+  def exploit(self, **kwargs):
+    """Decides whether  the worker should abandont the current solution.
+    
+    Given performance of the whole population, can decide whether the
+    worker should abandon the current solution and instead focus on a more
+    promising one.
+    """
+
+  def explore(self, **kwargs):
+    """Given the current solution and hyperparams proposes new ones."""
+
+  def copy_weights(self, src_replica, dst_replica):
+    """Copies variables from `src_replica` to `dst_replica`."""
+    src_model = self.model.models[src_replica]
+    dst_model = self.model.models[dst_replica]
+    variable_tensors = src_model.trainable_variables
+    if not tf.compat.v1.executing_eagerly():
+      sess = tf.compat.v1.keras.backend.get_session()
+      evaled_variables = sess.run(variable_tensors)
+      for var_tensor, value in zip(dst_model.trainable_variables,
+                                   evaled_variables):
+        var_tensor.load(value, session=sess)
+
+
+  def copy_hyperparams(self, src_replica, dst_replica):
+    """Copies variables from `src_replica` to `dst_replica`."""
+    hps = self.model.hpspace
+    for hpname in hps.hpspace[0]:
+      hps.hpspace[dst_replica][hpname] = hps.hpspace[dst_replica][hpname]
+
+
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
   def __init__(self, exchange_data, swap_step, burn_in=None):
