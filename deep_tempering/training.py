@@ -767,6 +767,7 @@ def _make_execution_function(model, mode):
     raise ValueError('Unrecognized mode: ', mode)
 
 def _stateful_metrics_names(metrics):
+  """Returns all stateful metrics from in `metrics`."""
   stateful_metrics = []
   for m in metrics:
     if m in ['accuracy', 'acc']:
