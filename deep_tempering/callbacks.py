@@ -366,27 +366,6 @@ class PBTExchangeCallback(BaseExchangeCallback):
     * `exploit()` and `explore()` methods correspond to the ones in the
       original paper, except that perform the actions for the entire
       population (and not for single individual replica).
-
-  ## Exploitation strategies
-  * Truncation Selection - all agents are ranked by episodic reward.
-    If the current agent is in the bottom 20% of the population, we
-    sample another agent uniformly from the top 20% of the population,
-    and copy its weights and hyperparameters.
-  * Binary tournament - each member of the population randomly selects
-    another member of the population, and copies its parameters if the
-    other member's score is better. Whenever one member of the
-    population is copied to another, all parameters - the
-    hyperparameters, weights are copied.
-
-  ## Example 1
-  Suppose there are 5 replicas R1, R2, R3, R4, R5. During ready stage, we start
-  by picking two random replicas. Suppose we picked R1 and R3. We compare
-  R1 vs R3 and we get R3 better than R1. We copy and perturb R1_new <-- R3 + Noise.
-  We now pick again two replicas out of three (out of R2, R4, R5).
-  Let's say we now pick R2 and R5, compare again and copy-perturb R2_new <-- R5 + Noise
-  We have left with replica R4.
-  Question:
-  Do we do something with replica R4? Do we compare it to something? Or leave it as is?
   """
 
   def __init__(self,
@@ -428,6 +407,9 @@ class PBTExchangeCallback(BaseExchangeCallback):
     have the highest recorded performance in the rest of the
     population, and `explore` could randomly perturb the
     hyperparameters with noise.
+
+    In short, copies weights and hyperparams from optimal replica and
+    perturbs them.
     """
     # `test_losses` is used for testing to verify the logic.
     losses = kwargs.get('test_losses', None) or self.evaluate_exchange_losses()
@@ -494,6 +476,9 @@ class PBTExchangeCallback(BaseExchangeCallback):
     hps = self.model.hpspace
     for hpname in hps.hpspace[0]:
       hps.hpspace[dst_replica][hpname] = hps.hpspace[dst_replica][hpname]
+
+  def exchange(self, *args, **kwargs):
+    self.exploit_and_explore(*args, **kwargs)
 
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
