@@ -69,10 +69,11 @@ def configure_callbacks(callbacks,
     model.history = cbks.History()
     if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
       callbacks += [MonitorOptimalModelCallback()]
+    # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
       callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
-  
+
   callback_list = CallbackListWrapper(callbacks)
 
   # Set callback model
@@ -97,8 +98,8 @@ def configure_callbacks(callbacks,
     progbar = get_progbar(model)
     callback_list.set_progbar(progbar, verbose=verbose)
 
-  # Set global step based on which exchanges are scheduled.
-  # This global step is incremented by CallbackListWrapper on each
+  # Set global step based on which the exchanges are scheduled.
+  # This global step is incremented by `CallbackListWrapper` on each
   # training batch end.
   if mode == ModeKeys.TRAIN:
     model.global_step = 0
@@ -253,7 +254,7 @@ class CallbackListWrapper(cbks.CallbackList):
 
 class BaseExchangeCallback(tf.keras.callbacks.Callback):
   """Base class for exchanges.
-  
+
   You never use this class directly, but instead instantiate one of
   its subclasses such as `dt.callbacks.MetropolisExchangeCallback`.
   """
@@ -276,7 +277,9 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     return self.swap_step is not None and self.exchange_data is not None
 
   def evaluate_metrics(self):
-    """Evaluates losses and metrics on exchange dataset."""
+    """Evaluates losses and metrics on exchange dataset.
+    TODO: Add sample weights and class weight option.
+    """
     if not self.exchangable:
       return []
     x, y = self.exchange_data
@@ -325,7 +328,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
             and self.swap_step is not None
             and global_step % self.swap_step == 0)
 
-  def exchange_hyperparams(self):
+  def exchange(self):
     """This method must be implemented in subclasses.
 
     This function is called once on the beginning of training to
@@ -338,7 +341,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     if not self.exchangable:
       return
 
-    self.exchange_hyperparams(*args, **kwargs)
+    self.exchange(*args, **kwargs)
 
 
   @property
@@ -352,12 +355,138 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   def get_ordered_losses(self, logs):
     return get_ordered_metrics(logs, 'loss')
 
+class PBTExchangeCallback(BaseExchangeCallback):
+  """Exchanges of parameters based on PBT scheduling.
+
+  See: Population Based Training of Neural Networks
+       https://arxiv.org/abs/1711.09846
+  NOTES:
+    * Replica/Worker and Ensemble/Population are used interchangeably
+      in the code and docs.
+    * `exploit()` and `explore()` methods correspond to the ones in the
+      original paper, except that perform the actions for the entire
+      population (and not for single individual replica).
+  """
+
+  def __init__(self,
+               exchange_data,
+               swap_step,
+               burn_in=None,
+               explore_weights=False,
+               explore_hyperparams=True,
+               weight_dist_fn=None,
+               hyperparams_dist=None):
+    """Instantiates a new `PBTExchangeCallback` instance.
+
+    Args:
+      weight_dist_fn: A function that given shape returns numpy array
+        of random values that are added to the to the weights. E.g.
+        `weight_dist_fn = functools.partial(np.random.normal, 0, 0.1)`
+      hyperparams_dist: A dictionary that maps hyperpamater name to a
+        function that returns random value by which the respective
+        hyperparameter is perturbed. For example:
+    """
+    self.should_explore_weights = explore_weights
+    self.should_explore_hyperparams = explore_hyperparams
+    self.weight_dist_fn = (weight_dist_fn
+                           or functools.partial(np.random.normal, 0, 0.1))
+    self.hyperparams_dist = hyperparams_dist
+
+    super(PBTExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
+
+  def exploit_and_explore(self, **kwargs):
+    """Decides whether  the worker should abandon the current solution.
+
+    Given performance of the whole population, can decide whether the
+    worker should abandon the current solution and instead focus on a
+    more promising one; and `explore`, which given the current solution
+    and hyperparameters proposes new ones to better explore the
+    solution space.
+
+    `exploit` could replace the current weights with the weights that
+    have the highest recorded performance in the rest of the
+    population, and `explore` could randomly perturb the
+    hyperparameters with noise.
+
+    In short, copies weights and hyperparams from optimal replica and
+    perturbs them.
+    """
+    # `test_losses` is used for testing to verify the logic.
+    losses = kwargs.get('test_losses', None) or self.evaluate_exchange_losses()
+    optimal_replica_id = np.argmin(losses)
+
+    optimal_weights = self.model.models[optimal_replica_id].trainable_variables
+
+    # copy vars
+    for rid in range(self.model.n_replicas):
+      if rid != optimal_replica_id:
+        if not tf.executing_eagerly():
+          self.copy_weights(optimal_replica_id, rid)
+
+          if self.should_explore_weights:
+            self.explore_weights(rid)
+          if self.should_explore_hyperparams:
+            # copy hparams and perturb
+            self.model.hpspace.copy_hyperparams(optimal_replica_id, rid)
+            self.explore_hyperparams(rid)
+
+        else:
+          raise NotImplementedError()
+
+    super().log_exchange_metrics(losses, optimal_replica=optimal_replica_id)
+
+  def copy_weights(self, src_replica, dst_replica):
+    """Copies variables from `src_replica` to `dst_replica`."""
+    # print('copy_weights ---> src_replica:', src_replica, ', dst_replica:', dst_replica)
+    src_model = self.model.models[src_replica]
+    dst_model = self.model.models[dst_replica]
+    src_vars = src_model.trainable_variables
+    dst_vars = dst_model.trainable_variables
+    sess = tf.compat.v1.keras.backend.get_session()
+    for vsrc, vdst in zip(src_vars, dst_vars):
+      np_vsrc = vsrc.eval(session=sess)
+      vdst.load(np_vsrc, session=sess)
+
+  def explore_weights(self, replica_id):
+    """Perturbs weights of `replica_id` with noise.
+
+    Args:
+      replica_id: The ID of replica that needs to be perturbed.
+    """
+    weight_dist_fn = (self.weight_dist_fn
+                      or functools.partial(np.random.normal, 0, 0.1))
+
+    sess = tf.compat.v1.keras.backend.get_session()
+    model = self.model.models[replica_id]
+    for w in model.trainable_variables:
+      shape = w.get_shape().as_list()
+      value = sess.run(w)
+      perturbed_value = value + self.weight_dist_fn(shape)
+      w.load(perturbed_value, session=sess)
+
+  def explore_hyperparams(self, replica_id):
+    """Perturbs hyperparams of `replica_id`."""
+    if self.hyperparams_dist is not None:
+      for hpname, dist in self.hyperparams_dist.items():
+        self.model.hpspace.perturb_hyperparams(
+            replica_id, hpname, dist)
+
+  def copy_hyperparams(self, src_replica, dst_replica):
+    """Copies variables from `src_replica` to `dst_replica`."""
+    hps = self.model.hpspace
+    for hpname in hps.hpspace[0]:
+      hps.hpspace[dst_replica][hpname] = hps.hpspace[dst_replica][hpname]
+
+  def exchange(self, *args, **kwargs):
+    self.exploit_and_explore(*args, **kwargs)
+
+
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
   def __init__(self, exchange_data, swap_step, burn_in=None):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
 
-  def exchange_hyperparams(self, **kwargs):
+  def exchange(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
 
     This function is called once on the beginning of training to

@@ -9,6 +9,79 @@ from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
 from deep_tempering.training_test import model_builder
 
+def test_pbt_callback():
+  tf.compat.v1.keras.backend.clear_session()
+  em = training.EnsembleModel(model_builder)
+  optimizer = tf.keras.optimizers.SGD()
+  loss = 'binary_crossentropy'
+  n_replicas = 4
+  em.compile(optimizer, loss, n_replicas)
+  hparams_dict = {
+      'learning_rate': np.linspace(0.001, 0.01, n_replicas),
+      'dropout_rate': np.linspace(0., 0.6, n_replicas)
+  }
+  hpss = training_utils.HyperParamSpace(em, hparams_dict)
+  em._hp_state_space = hpss
+  x = np.random.normal(0, 2, (18, 2))
+  y = np.random.randint(0, 2, (18, 1))
+
+  # define a dict that maps hyperparameter to the distribution
+  # by which its value will be perturbed (in this test the
+  # constant values are added)
+  hparams_dist_dict = {
+  'learning_rate': lambda *x: 0,
+  'dropout_rate': lambda *x: 0
+  }
+  # define the distribution by which the weights of each
+  # replica will be perturbed
+  weight_dist = lambda shape: np.zeros(shape)
+
+  swap_step = 10
+  explore_weights = True
+  explore_hyperparams = True
+  burn_in = 1
+
+  clb = cbks.PBTExchangeCallback((x, y),
+                                 swap_step=swap_step,
+                                 explore_weights=explore_weights,
+                                 explore_hyperparams=explore_hyperparams,
+                                 burn_in=burn_in,
+                                 weight_dist_fn=weight_dist,
+                                 hyperparams_dist=hparams_dist_dict)
+  clb.model = em
+  em.global_step = 0
+
+  # test that the values were instantiated correctly
+  assert clb.swap_step == swap_step
+  assert clb.burn_in == burn_in
+  assert explore_weights == clb.should_explore_weights
+  assert explore_hyperparams == clb.should_explore_hyperparams
+  assert len(hparams_dist_dict) == len(clb.hyperparams_dist)
+  
+  # to test the logit we define a test losses
+  # and test whether replicas have copied weights and hyperparams correctly
+  test_losses = [0.1 * x for x in range(1, n_replicas + 1)]
+  # every replica should copy from replica 0
+  sess = tf.keras.backend.get_session()
+  rid0_weights = sess.run(em.models[0].trainable_variables)
+  rid0_hyperparams = hpss.hpspace[0]
+  
+  # copy weights and hyperparams from replica 0 to all other
+  clb.exploit_and_explore(test_losses=test_losses)
+  
+  for i, m in enumerate(em.models[1:]):
+    weights = sess.run(m.trainable_variables)
+
+    for w1, w2 in zip(rid0_weights, weights):
+      np.testing.assert_almost_equal(w1, w2)
+    hparams = hpss.hpspace[i + 1]
+    for hname in rid0_hyperparams:
+      np.testing.assert_almost_equal(rid0_hyperparams[hname], hparams[hname])
+
+
+  def test_copy_weights():
+    """Test that the values are copied as intended"""
+
 def test_configure_callbacks():
   model = training.EnsembleModel(model_builder)
   optimizer = tf.keras.optimizers.SGD()
@@ -108,7 +181,7 @@ def test_metropolis_callback():
   # (beta_i - beta_j) < 0 and losses[i] - losses[j] = 0.8 - 0.9 < 0
   # and exp((beta_i - beta_j) * (losses[i] - losses[j])) > 1
   exchange_pair = 9
-  clb.exchange_hyperparams(hpname=hpname, exchange_pair=exchange_pair)
+  clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
   assert hpspace.hpspace == expected
 
 def test_all_exchange_callback():
