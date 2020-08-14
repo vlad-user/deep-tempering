@@ -18,7 +18,12 @@ from deep_tempering import callbacks as cbks
 class EnsembleModel:
   """Mimics the behaviour of `keras.Model` for ensemble PT training."""
   def __init__(self, model_builder):
-    """Instantiates a new PTEnsemble instance."""
+    """Instantiates a new PTEnsemble instance.
+
+    model_builder: A function that given a `HyperParamState` creates
+      and returns a keras' model using `HyperParamState.get_hparam()`
+      in place of hyper parameters (e.g. for dropout rate)
+    """
     if not callable(model_builder):
       raise TypeError("Expected callable `model_builder`.")
 
@@ -45,17 +50,47 @@ class EnsembleModel:
               optimizer,
               loss,
               n_replicas,
-              metrics=None,
-              target_tensors=None):
-
+              metrics=None):
+    """Configures the model for training.
+    
+  Args:
+    optimizer: String (name of optimizer) or optimizer instance. See
+      `tf.keras.optimizers`.
+    loss: String (name of objective function), objective function or
+      `tf.keras.losses.Loss` instance. See `tf.keras.losses`. An objective
+      function is any callable with the signature `loss = fn(y_true,
+      y_pred)`, where y_true = ground truth values with shape =
+      `[batch_size, d0, .. dN]`, except sparse loss functions such as sparse
+      categorical crossentropy where shape = `[batch_size, d0, .. dN-1]`.
+      y_pred = predicted values with shape = `[batch_size, d0, .. dN]`. It
+      returns a weighted loss float tensor. If a custom `Loss` instance is
+      used and reduction is set to NONE, return value has the shape
+      [batch_size, d0, .. dN-1] ie. per-sample or per-timestep loss values;
+      otherwise, it is a scalar. If the model has multiple outputs, you can
+      use a different loss on each output by passing a dictionary or a list
+      of losses. The loss value that will be minimized by the model will
+      then be the sum of all individual losses.
+    metrics: List of metrics to be evaluated by the model during training
+      and testing. Each of this can be a string (name of a built-in
+      function), function or a `tf.keras.metrics.Metric` instance. See
+      `tf.keras.metrics`. Typically you will use `metrics=['accuracy']`. A
+      function is any callable with the signature `result = fn(y_true,
+      y_pred)`. To specify different metrics for different outputs of a
+      multi-output model, you could also pass a dictionary, such as
+        `metrics={'output_a': 'accuracy', 'output_b': ['accuracy', 'mse']}`.
+          You can also pass a list (len = len(outputs)) of lists of metrics
+          such as `metrics=[['accuracy'], ['accuracy', 'mse']]` or
+          `metrics=['accuracy', ['accuracy', 'mse']]`. When you pass the
+          strings 'accuracy' or 'acc', we convert this to one of
+          `tf.keras.metrics.BinaryAccuracy`,
+          `tf.keras.metrics.CategoricalAccuracy`,
+          `tf.keras.metrics.SparseCategoricalAccuracy` based on the loss
+          function used and the model output shape. We do a similar
+          conversion for the strings 'crossentropy' and 'ce' as well.
+      n_replicas: int. The size of the ensemble.
+    """
     if any(arg is None for arg in (optimizer, loss, n_replicas)):
       raise ValueError('The arg is None')
-
-    # validate losses
-    # ...
-
-    # validate optimizer
-    # ...
 
     self.n_replicas = n_replicas
     metrics = metrics or []
@@ -105,7 +140,7 @@ class EnsembleModel:
                                                                     output_names)
 
         # Set placeholders instead of actual values for each possible
-        # hyperparameterd of the optimizer. All float values in `_hyper`
+        # hyperparameter of the optimizer. All float values in `_hyper`
         # could be exchaned between different replicas. By default,
         # if the value is not exchanged the default value is fed. No need
         # to take care of feeding values that are not being exchanged.
@@ -153,6 +188,7 @@ class EnsembleModel:
 
   @property
   def metrics_names(self):
+    """Returns the model's display labels for all outputs."""
     # losses
     names = ['loss_%d' %i for i in range(self.n_replicas)]
     # the rest of the metrics
@@ -166,9 +202,18 @@ class EnsembleModel:
 
   @property
   def models(self):
+    """Returns a list of all keras' models."""
     return [self._train_attrs[i]['model'] for i in range(self.n_replicas)]
 
   def predict_on_batch(self, x, y):
+    """Returns predictions for a single batch of samples.
+
+    Args:
+      x: Input data. It could be: - A Numpy array (or array-like), or a list
+        of arrays (in case the model has multiple inputs).
+    Returns:
+      A list of numpy array(s) of predictions for each replica.
+    """
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       hp_tensors_and_values = (
@@ -181,7 +226,14 @@ class EnsembleModel:
       raise NotImplementedError()
 
   def test_on_batch(self, x, y):
-    """Test all replicas on a single batch of samples."""
+    """Test all replicas on a single batch of samples.
+
+    Args:
+      x: Input data. It could be: - A Numpy array (or array-like), or a list
+        of arrays (in case the model has multiple inputs).
+      y: Target data. Like the input data `x`, Numpy
+        array(s).
+    """
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       feed_dict.update({
@@ -203,7 +255,14 @@ class EnsembleModel:
       raise NotImplementedError()
 
   def train_on_batch(self, x, y):
-    """Runs a single gradient update on a single batch of data."""
+    """Runs a single gradient update on a single batch of data.
+    
+    Args:
+      x: Input data. It could be: - A Numpy array (or array-like), or a list
+        of arrays (in case the model has multiple inputs).
+      y: Target data. Like the input data `x`, Numpy
+        array(s).
+    """
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       feed_dict.update({
@@ -217,7 +276,6 @@ class EnsembleModel:
 
       for metric_name in self._stateful_metrics_names:
         metric_tensors += self._get_metric_tensors(metric_name)
-
 
       ops = self._get_train_ops()
       evaluated = self._run(metric_tensors + ops, feed_dict=feed_dict)
@@ -344,9 +402,74 @@ class EnsembleModel:
           callbacks=None,
           swap_step=None,
           burn_in=None):
-    
+    """Trains the model for a fixed number of epochs (iterations on a dataset).
+
+      Args:
+        x: Input data. It could be: - A Numpy array (or array-like), or a list
+          of arrays (in case the model has multiple inputs).
+        y: Target data. Like the input data `x`, Numpy
+          array(s).
+        hyper_params: A `dict` that maps replica ID's to hyperparameters
+          values. For example:
+          ```python
+          hyper_params = {
+              0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
+              1: {'learning_rate': 0.005, 'dropout_rate': 0.3},
+              2: {'learning_rate': 0.01, 'dropout_rate': 0.6}
+          }
+          ```
+        validation_split: Float between 0 and 1.
+          Fraction of the training data to be used as validation data.
+          The model will set apart this fraction of the training data,
+          will not train on it, and will evaluate
+          the loss and any model metrics
+          on this data at the end of each epoch.
+          The validation data is selected from the last samples
+          in the `x` and `y` data provided, before shuffling.
+        validation_data: Data on which to evaluate
+          the loss and any model metrics at the end of each epoch.
+          The model will not be trained on this data. Thus, note the fact
+          that the validation loss of data provided using `validation_split`
+          or `validation_data` is not affected by regularization layers like
+          noise and dropuout.
+          `validation_data` will override `validation_split`.
+        exchange_split: Similar to `validation_split`, only for exchange data.
+        exchange_data: Similar to `validation_data`. If `exchange_data` is not
+          provided, `exchange_split` fraction of training data is taken, otherwise
+          `validation_data` is used. If also validation data is not passed, then
+          raises `ValueError`.
+        batch_size: Integer or `None`.
+          Number of samples per gradient update.
+          If unspecified, `batch_size` will default to 32.
+          Do not specify the `batch_size` if your data is in the
+          form of datasets, generators, or `keras.utils.Sequence` instances
+          (since they generate batches).
+        epochs: Integer. Number of epochs to train the model.
+          An epoch is an iteration over the entire `x` and `y`
+          data provided.
+          Note that in conjunction with `initial_epoch`,
+          `epochs` is to be understood as "final epoch".
+          The model is not trained for a number of iterations
+          given by `epochs`, but merely until the epoch
+          of index `epochs` is reached.
+        verbose: 0, 1, or 2. Verbosity mode.
+          0 = silent, 1 = progress bar, 2 = one line per epoch.
+          Note that the progress bar is not particularly useful when
+          logged to a file, so verbose=2 is recommended when not running
+          interactively (eg, in a production environment).
+        callbacks: List of `keras.callbacks.Callback` instances.
+          List of callbacks to apply during training.
+          See `tf.keras.callbacks`.
+        swap_step: int, interval at which the swap between replicas
+          is attempted (batch steps).
+        burn_in: int, amount of batch steps during which the exchanges
+           do not attempted.
+        ```
+    """
     if self._hp_state_space is None:
       self._hp_state_space = training_utils.HyperParamSpace(self, hyper_params)
+
+    batch_size = batch_size or 32
 
     if len(y.shape) == 1:
       y = y[:, None]
@@ -381,22 +504,10 @@ class EnsembleModel:
     Computation is done in batches.
 
     Args:
-      x: Input data. It could be:
-        - A Numpy array (or array-like), or a list of arrays
-          (in case the model has multiple inputs).
-        - A TensorFlow tensor, or a list of tensors
-          (in case the model has multiple inputs).
-        - A dict mapping input names to the corresponding array/tensors,
-          if the model has named inputs.
-        - A `tf.data` dataset.
-        - A generator or `keras.utils.Sequence` instance.
-      y: Target data. Like the input data `x`,
-        it could be either Numpy array(s) or TensorFlow tensor(s).
-        It should be consistent with `x` (you cannot have Numpy inputs and
-        tensor targets, or inversely).
-        If `x` is a dataset, generator or
-        `keras.utils.Sequence` instance, `y` should not be specified (since
-        targets will be obtained from the iterator/dataset).
+      x: Input data. It could be: - A Numpy array (or array-like), or a list
+        of arrays (in case the model has multiple inputs).
+      y: Target data. Like the input data `x`, Numpy
+        array(s).
       batch_size: Integer or `None`.
           Number of samples per gradient update.
           If unspecified, `batch_size` will default to 32.
@@ -441,20 +552,10 @@ class EnsembleModel:
     """Generates output predictions for the input samples.
     Computation is done in batches.
     Args:
-      x: Input samples. It could be:
-        - A Numpy array (or array-like), or a list of arrays
-          (in case the model has multiple inputs).
-        - A TensorFlow tensor, or a list of tensors
-          (in case the model has multiple inputs).
-        - A `tf.data` dataset.
-        - A generator or `keras.utils.Sequence` instance.
-      batch_size: Integer or `None`.
-          Number of samples per gradient update.
-          If unspecified, `batch_size` will default to 32.
-          Do not specify the `batch_size` is your data is in the
-          form of symbolic tensors, dataset,
-          generators, or `keras.utils.Sequence` instances (since they generate
-          batches).
+      x: Input data. It could be: - A Numpy array (or array-like), or a list
+        of arrays (in case the model has multiple inputs).
+      y: Target data. Like the input data `x`, Numpy
+        array(s).
       verbose: Verbosity mode, 0 or 1.
       callbacks: List of `keras.callbacks.Callback` instances.
           List of callbacks to apply during prediction.

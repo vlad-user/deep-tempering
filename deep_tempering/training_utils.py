@@ -59,7 +59,7 @@ class HyperParamSpace:
     # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
     #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
     #  2: {'learning_rate': 0.01, 'dropout_rate': 0.6}}
-    ```jjj
+    ```
     """
     self.ensemble_model = ensemble_model
     hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())

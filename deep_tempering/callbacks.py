@@ -130,6 +130,8 @@ def set_callback_parameters(callback_list,
     verbose: int, 0 or 1. Keras logging verbosity to pass to ProgbarLogger.
     mode: String. One of ModeKeys.TRAIN, ModeKeys.TEST, or ModeKeys.PREDICT.
       Which loop mode to configure callbacks for.
+    swap_step: int. Number of batch steps the exchange is attempted.
+    burn_in: int. Number of steps during which the exchanges are not performed.
   """
   for cbk in callback_list:
     if isinstance(cbk, (cbks.BaseLogger, cbks.ProgbarLogger)):
@@ -195,6 +197,7 @@ class CallbackListWrapper(cbks.CallbackList):
 
     # exchange on the beginning of training so we could log
     # initial state hyperparameter state of each replica.
+    # (hyper-params are logged at the end of the exchange)
     if mode == ModeKeys.TRAIN:
       for callback in self.callbacks:
         if isinstance(callback, BaseExchangeCallback):
@@ -236,6 +239,8 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
+    # at the end of the testing iteration we set the progress
+    # bar back to training one
     if mode == ModeKeys.TEST:
       test_progbar = self.progbar
       self.progbar = self._train_progbar
@@ -601,9 +606,14 @@ def _init_exchange_logs(callback, metrics_dict=None):
 def _metrics_sorting_key(metric_name):
   """Key for sorting indexed metrics names.
 
-  For example, losses indexed with with one index level
+  For example, losses indexed with one index level
   (loss_1, loss_2, etc) come before losses with two index
-  levels (loss_1_0, loss_1_1).
+  levels (loss_1_0, loss_1_1). This function to be used as key in
+  `list.sort()` (see `get_ordered_metrics()`).
+
+  Args:
+    metric_name: The name of the metric which indices and sub-indices
+      need to be sorted.
   """
   splitted = metric_name.split('_')
   # `index_level` is the level of underscore indices in the metric name
@@ -619,6 +629,22 @@ def _metrics_sorting_key(metric_name):
   return int(str(index_level) + ''.join(reversed(indices)))
 
 def get_ordered_metrics(logs, metric_name='loss'):
+  """Extracts and orders metrics of `metric_name` for dictionary `logs`.
+
+  Orders based on indices of `metric_name`. For example, given
+  `logs = {'loss_0': 0.1, 'loss_1': 0.2, 'acc_0': 1., 'acc_1': 0.9}`
+  and `metric_name = 'loss'` the output will be
+  ```python
+  [('loss_0', 0.1), ('loss_1', 0.2)]
+  ```
+
+  Args:
+    logs: A dictionary of logs (for a single batch).
+    metric_name: The name of the metric (without suffix indices)
+
+  Returns:
+    A list of tuples (`metric_name`, `metric_value`).
+  """
   all_losses_keys = [l for l in logs.keys() if l.startswith(metric_name)]
   all_losses_keys.sort(key=_metrics_sorting_key)
   res = [(name, logs[name]) for name in all_losses_keys]
