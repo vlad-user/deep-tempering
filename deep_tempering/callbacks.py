@@ -67,7 +67,7 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
-    if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
+    if not any(isinstance(c, MonitorOptimalModelCallback) for c in callbacks):
       callbacks += [MonitorOptimalModelCallback()]
     # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
