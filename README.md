@@ -1,8 +1,12 @@
 # deep-tempering
 Replica-exchange optimisation method for Tensorflow with Keras-like interface.
 
+## Installation
+```
+pip install git+https://github.com/vlad-user/deep-tempering.git
+```
 
-Usage example:
+## Usage example:
 ```python
 import tensorflow as tf
 import numpy as np
