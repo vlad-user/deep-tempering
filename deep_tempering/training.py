@@ -244,7 +244,7 @@ class EnsembleModel:
     # training_test.test_metrics_and_losses() must be modified.
 
     # decide optimal based on argmax or argmin of the metric
-    if 'loss' in metric_name or 'error' in metric_name:
+    if 'loss' in metric_name or 'error' in metric_name:  #ToDo: change to method param
       argfn = np.argmin
     else:
       argfn = np.argmax
@@ -633,7 +633,7 @@ def model_iteration(model,
 
   num_samples_or_steps = len(train_dataset)
 
-  f = _make_execution_function(model, mode)
+  f = _make_execution_function(model, mode) #whether to train, test or predict
 
   if mode == ModeKeys.PREDICT:
     aggregator = keras_train_utils.OutputsAggregator(
@@ -783,4 +783,5 @@ def _stateful_metrics_names(metrics):
     stateful_metrics.append(name)
 
   return stateful_metrics
+
 
