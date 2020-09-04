@@ -10,7 +10,6 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 import tqdm
 
-import albumentations as A
 
 
 from deep_tempering import training_utils
@@ -205,23 +204,11 @@ class EnsembleModel:
     else:
       raise NotImplementedError()
 
-  def augment_image(self, img):
-    transform = A.Compose([A.HorizontalFlip(),
-                           A.PadIfNeeded(min_height=img.shape[0] + 8, min_width=img.shape[1] + 8),
-                           A.RandomCrop(height=img.shape[0], width=img.shape[1])
-                           ]
-                          )
-    tr_img = transform(image=img)['image']
-    return tr_img
-
   def train_on_batch(self, x, y):
     """Runs a single gradient update on a single batch of data."""
-    augmented_x = np.zeros((x.shape))
-
     if not tf.executing_eagerly():
-      for i, img in enumerate(x):
-        augmented_x[i] = self.augment_image(img)
-      feed_dict = {input_: augmented_x for input_ in self.inputs}
+
+      feed_dict = {input_: x for input_ in self.inputs}
       feed_dict.update({
           self._target_tensor: y
       })

@@ -455,7 +455,7 @@ def gpu_device_name(replica_id):
 
 
 
-  gpus_names = [g.name.replace('/physical_device:', '') for g in gpus]
+  gpus_names = [g.name for g in gpus]
   if not gpus_names:
     return '/cpu:0'
 
