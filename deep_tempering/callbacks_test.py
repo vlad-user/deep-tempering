@@ -57,7 +57,7 @@ def test_pbt_callback():
   assert explore_weights == clb.should_explore_weights
   assert explore_hyperparams == clb.should_explore_hyperparams
   assert len(hparams_dist_dict) == len(clb.hyperparams_dist)
-  
+
   # to test the logit we define a test losses
   # and test whether replicas have copied weights and hyperparams correctly
   test_losses = [0.1 * x for x in range(1, n_replicas + 1)]
@@ -65,10 +65,10 @@ def test_pbt_callback():
   sess = tf.keras.backend.get_session()
   rid0_weights = sess.run(em.models[0].trainable_variables)
   rid0_hyperparams = hpss.hpspace[0]
-  
+
   # copy weights and hyperparams from replica 0 to all other
   clb.exploit_and_explore(test_losses=test_losses)
-  
+
   for i, m in enumerate(em.models[1:]):
     weights = sess.run(m.trainable_variables)
 
@@ -78,9 +78,6 @@ def test_pbt_callback():
     for hname in rid0_hyperparams:
       np.testing.assert_almost_equal(rid0_hyperparams[hname], hparams[hname])
 
-
-  def test_copy_weights():
-    """Test that the values are copied as intended"""
 
 def test_configure_callbacks():
   model = training.EnsembleModel(model_builder)
@@ -172,7 +169,7 @@ def test_metropolis_callback():
   hpname = 'dropout_rate'
 
   # expected state of hyperparams after calling `exchage()` function
-  expected = copy.deepcopy(hpspace.hpspace)
+  expected = copy.copy(hpspace.hpspace)
   t = expected[8]['dropout_rate']
   expected[8]['dropout_rate'] = expected[9]['dropout_rate']
   expected[9]['dropout_rate'] = t
@@ -200,8 +197,8 @@ def test_all_exchange_callback():
   y_train = np.arange(6).astype('float')
   y_test = np.arange(6, 12).astype('float')
   hp = {
-      'learning_rate': [0.01 , 0.02, 0.03, 0.04],
-      'dropout_rate':  [0.1,   0.2,  0.3, 0.4]
+    'learning_rate': [0.01 , 0.02, 0.03, 0.04],
+    'dropout_rate':  [0.1,   0.2,  0.3, 0.4]
   }
 
   batch_size = 3
@@ -217,43 +214,48 @@ def test_all_exchange_callback():
   # values of losses that train_on_batch/test_on_batch
   # will return
   def train_on_batch(x, y):
-    train_losses = [0.16, 0.15, 0.14, 0.13]
-    return train_losses
+      train_losses = [0.16, 0.15, 0.14, 0.13]
+      return train_losses
 
   def test_on_batch(x, y):
-    test_losses = [0.25, 0.24, 0.23, 0.22]
-    return test_losses
+      test_losses = [0.25, 0.24, 0.23, 0.22]
+      return test_losses
 
   model.train_on_batch = train_on_batch
   model.test_on_batch = test_on_batch
 
   # test that we've added correctly the ExchangeCallback
   callbacks_list = cbks.configure_callbacks(callbacks,
-                                            model,
-                                            do_validation=do_validation,
-                                            batch_size=batch_size,
-                                            epochs=epochs,
-                                            exchange_data=exchange_data,
-                                            swap_step=swap_step)
+                                          model,
+                                          do_validation=do_validation,
+                                          batch_size=batch_size,
+                                          epochs=epochs,
+                                          exchange_data=exchange_data,
+                                          swap_step=swap_step)
   # callbacks_list has instance of `BaseExchangeCallback`
   assert any(isinstance(c, cbks.BaseExchangeCallback)
-             for c in callbacks_list.callbacks)
+           for c in callbacks_list.callbacks)
 
   def get_first_exchange_callback():
-    for cbk in callbacks_list.callbacks:
-      if isinstance(cbk, cbks.BaseExchangeCallback):
-        return cbk
+      for cbk in callbacks_list.callbacks:
+          if isinstance(cbk, cbks.BaseExchangeCallback):
+              return cbk
 
-  prev_hpspace = copy.deepcopy(model.hpspace.hpspace)
+  prev_hpspace = {
+      k: {k1: v1 for k1, v1 in v.items()} for k, v in model.hpspace.hpspace.items()
+  }
 
   get_first_exchange_callback()._safe_exchange(hpname='dropout_rate',
-                                               exchange_pair=3)
-  # test that exchange happened
+                                               exchange_pair=3,
+                                               exchange_proba=1)
+
+  # test that exchange has happened       
   assert model.hpspace.hpspace[3]['dropout_rate'] == prev_hpspace[2]['dropout_rate']
 
   get_first_exchange_callback()._safe_exchange(hpname='learning_rate',
-                                               exchange_pair=3)
-  # test that exchange happened
-  assert model.hpspace.hpspace[3] == prev_hpspace[2]
+                                               exchange_pair=3,
+                                               exchange_proba=1)
+  # test that exchange has happened
+  assert model.hpspace.hpspace[3]['learning_rate'] == prev_hpspace[2]['learning_rate']
   assert get_first_exchange_callback().exchange_logs['swaped'] == [1, 1]
   assert get_first_exchange_callback().exchange_logs['hpname'] == ['dropout_rate', 'learning_rate']

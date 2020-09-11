@@ -45,6 +45,7 @@ class EnsembleModel:
     # (maybe) should be protected  
     self.inputs = None
     self.outputs = None
+    self.global_step = 0
 
   def compile(self,
               optimizer,
@@ -409,15 +410,26 @@ class EnsembleModel:
           of arrays (in case the model has multiple inputs).
         y: Target data. Like the input data `x`, Numpy
           array(s).
-        hyper_params: A `dict` that maps replica ID's to hyperparameters
-          values. For example:
-          ```python
-          hyper_params = {
-              0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
-              1: {'learning_rate': 0.005, 'dropout_rate': 0.3},
-              2: {'learning_rate': 0.01, 'dropout_rate': 0.6}
-          }
-          ```
+        hyper_params: One of the following:
+          * `dict` that maps replica ID's to hyperparameters values. For example:
+            ```python
+            hyper_params = {
+              'learning_rate': np.linspace(0.01, 0.001, n_replicas),
+              'dropout_rate': np.linspace(0, 0.5, n_replicas)
+            }
+            ```
+          * `dt.ScheduledHyperParams` object (in case of hyperparameters being modified to
+            specific values during training):
+            ```python
+            hyper_params = dt.SchuduledHyperParams({
+                1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+                    'dropout_rate': np.zeros((n_replicas,))
+                }
+                200: {'learning_rate': np.linspace(0.01, 0.001, n_replicas), # starting at step 200
+                      'dropout_rate': np.linspace(0, 0.5, n_replicas)
+                }
+            })
+            ```
         validation_split: Float between 0 and 1.
           Fraction of the training data to be used as validation data.
           The model will set apart this fraction of the training data,

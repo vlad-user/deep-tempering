@@ -13,13 +13,124 @@ from sklearn.utils import shuffle as sklearn_shuffle
 
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
+class ScheduledHyperParams:
+  """Scheduler for hyper-parameters.
+  
+  Has `dict`-like interface.
+
+  NOTE: Doesn't support deep copy.
+  """
+  def __init__(self, scheduled_hparams):
+    if not any(k in {0, 1} for k in scheduled_hparams.keys()):
+      err_msg = ('The first step in scheduled_hparams must start either with '
+                 '`0`s or `1` (which are equivalent).')
+      raise ValueError(err_msg)
+
+    first_step = 0 if 0 in scheduled_hparams else 1
+    for v in scheduled_hparams[first_step].values():
+      if isinstance(v, np.ndarray):
+        n_replicas = v.shape[0]
+      else:
+        n_replicas = len(v)
+      break
+    self.n_replicas = n_replicas
+
+    shp = {}
+    for step, hp in scheduled_hparams.items():
+      shp[step] = {}
+      for i in range(n_replicas):
+        shp[step][i] = {
+            hpname: hpvals[i] for hpname, hpvals in hp.items()
+        }
+    self._scheduled_hparams = shp
+
+    self._model = None
+
+  def set_model(self, model):
+    """Sets `EnsembleModel`."""
+    self._model = model
+
+  def get_current_scheduled_step(self):
+
+    scheduled_steps = sorted(list(self._scheduled_hparams))
+    # if model is not set return dict with "lowest" key
+    if self._model is None:
+      return min(scheduled_steps)
+
+    glob_step = self.global_step()
+
+    step = scheduled_steps[0] # the key in `self._scheduled_hparams`
+
+    for i in range(1, len(scheduled_steps)):
+      if glob_step >= scheduled_steps[i]:
+        step = scheduled_steps[i]
+
+    return step
+
+  def global_step(self):
+    return self._model.global_step
+
+  def __getitem__(self, k):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].__getitem__(k)
+
+  def __setitem__(self, k, v):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].__setitem__(k, v)
+
+  def __len__(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].__len__()
+
+  def __iter__(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].__iter__()
+
+  def __repr__(self):
+    return json.dumps(self.repr())
+
+  def __eq__(self, rhs):
+    curr_schedule_step = self.get_current_scheduled_step()
+    lhs = self._scheduled_hparams[curr_schedule_step]
+
+    if len(rhs) != len(lhs):
+      return False
+
+    for k in lhs.keys():
+      if k not in rhs:
+        return False
+      if rhs[k] != lhs[k]:
+        return False
+
+    return True
+
+  def copy(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].copy()
+
+  def keys(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step].keys()
+
+  def values(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return  self._scheduled_hparams[curr_schedule_step].values()
+
+  def items(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return  self._scheduled_hparams[curr_schedule_step].items()
+
+  def repr(self):
+    curr_schedule_step = self.get_current_scheduled_step()
+    return self._scheduled_hparams[curr_schedule_step]
+
 
 class HyperParamState:
   def __init__(self, default_values=None):
     self._attrs = {}
     self.default_values = default_values
   def get_hparam(self, name, default_value=None):
-    # during creating of the optimal model default (such
+    # during creation of the optimal model default value (such
     # as dropout etc) could be passed.
     if (isinstance(self.default_values, abc.Mapping)
         and name in self.default_values):
@@ -66,10 +177,16 @@ class HyperParamSpace:
     n_replicas = len(hparams_dict[hparams_dict.__iter__().__next__()])
     self._hyperparameter_names = sorted(list(hparams_dict.keys()))
     self.n_replicas = n_replicas
-    self.hpspace = {
-        i: {k: v[i] for k, v in hparams_dict.items()}
-        for i in range(n_replicas)
-    }
+    if not isinstance(hparams_dict, ScheduledHyperParams):
+      # hyperparams starts with step 1
+      self.hpspace = ScheduledHyperParams({1: hparams_dict})
+    else:
+      self.hpspace = hparams_dict
+    self.hpspace.set_model(ensemble_model)
+    # self.hpspace = {
+    #     i: {k: v[i] for k, v in hparams_dict.items()}
+    #     for i in range(n_replicas)
+    # }
 
   @property
   def hyperparameters_names(self):

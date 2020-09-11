@@ -1,4 +1,5 @@
 import copy
+import random
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -154,7 +155,7 @@ def test_train_validation_exchange_data():
   x_train_input = np.random.normal(0, 2, (100, 2))
   y_train_input = np.random.randint(0, 2, (100,))
   train_data_input = (x_train_input, y_train_input)
-  
+
   validation_data_input = (np.random.normal(0, 1, (20, 2)),
                            np.random.randint(0, 2, (20)))
   exchange_data_input = (np.random.normal(0, 1, (20, 2)),
@@ -182,14 +183,14 @@ def test_train_validation_exchange_data():
           train_data_input, None, exchange_data_input))
   assert_almost_equal(train_data + exchange_data, train_data_input + exchange_data_input)
   assert validation_data is None
-  
+
   # validation data is not None, exchange data is None
   train_data, validation_data, exchange_data = (
       utils._train_validation_exchange_data(
           train_data_input, validation_data_input, None))
   assert_almost_equal(train_data + exchange_data + validation_data,
                       train_data_input + validation_data_input + validation_data_input)
-  
+
   # validation_data is None, but validation_split == 0.2
   random_state = 0
   validation_split = 0.2
@@ -201,7 +202,7 @@ def test_train_validation_exchange_data():
           train_data_input, validation_split=validation_split))
   assert_almost_equal(train_data + exchange_data + validation_data,
                       (x, y, x_valid, y_valid, x_valid, y_valid))
-  
+
   # validation_data is None, validation_split == 0., exchange_split == 0.3
   random_state = 0
   exchange_split = 0.3
@@ -214,7 +215,7 @@ def test_train_validation_exchange_data():
   assert_almost_equal(train_data + exchange_data,
                       (x, y, x_exchange, y_exchange))
   assert validation_data is None
-  
+
   # validation_data is None, exchange_data is None,
   # validation_split == 0.1, exchange_split = 0.15
   random_state = 0
@@ -232,3 +233,133 @@ def test_train_validation_exchange_data():
           exchange_split=exchange_split))
   assert_almost_equal(train_data + validation_data + exchange_data,
                       (x, y) + (x_valid, y_valid) + (x_exchange, y_exchange))
+
+def test_scheduled_hyper_params():
+  n_replicas = 6
+
+  ############### test multiple scheduled steps ###############
+  schedule_dict = {
+      1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+          'dropout_rate': np.zeros((n_replicas,))},
+      200: {'learning_rate': np.linspace(0.01, 0.001, n_replicas), # starting at step 200
+            'dropout_rate': np.linspace(0, 0.5, n_replicas)}
+  }
+  hp = utils.ScheduledHyperParams(schedule_dict)
+
+  class Model:
+      pass
+
+  m = Model()
+  m.global_step = 1
+  hp.set_model(m)
+
+  expected = {
+      i: {k: v[1] for k, v in schedule_dict[1].items()}
+      for i in range(n_replicas)
+  }
+
+  for i in range(199):
+      assert hp.repr() == expected
+      m.global_step += 1
+
+  expected = {
+      i: {k: v[i] for k, v in schedule_dict[200].items()}
+      for i in range(n_replicas)
+  }
+
+  for i in range(1000):
+      assert hp == expected
+      m.global_step += 1
+
+  ############### test single step ###############
+  schedule_dict = {
+      1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+          'dropout_rate': np.zeros((n_replicas,))}
+  }
+  hp = utils.ScheduledHyperParams(schedule_dict)
+
+  m = Model()
+  m.global_step = 1
+  hp.set_model(m)
+
+  expected = {
+      i: {k: v[1] for k, v in schedule_dict[1].items()}
+      for i in range(n_replicas)
+  }
+
+  for i in range(199):
+      assert hp == expected
+      m.global_step += 1
+
+  ############### test single step (step doesn't start with 0, 1) ###############
+  schedule_dict = {
+      2: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+          'dropout_rate': np.zeros((n_replicas,))}
+  }
+  with pytest.raises(ValueError):
+      hp = utils.ScheduledHyperParams(schedule_dict)
+
+  ############### test single step (start with 0) ###############
+  schedule_dict = {
+      0: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+          'dropout_rate': np.zeros((n_replicas,))}
+  }
+  # check that no exceptions is raised
+  hp = utils.ScheduledHyperParams(schedule_dict)
+
+  ############### test __getitem__, __setitem__ ###############
+  expected = {
+      i: {k: v[1] for k, v in schedule_dict[0].items()}
+      for i in range(n_replicas)
+  }
+
+  tmp = hp[0]['learning_rate']
+  hp[0]['learning_rate'] = hp[1]['learning_rate']
+  hp[1]['learning_rate'] = tmp
+  assert hp[1]['learning_rate'] == tmp
+
+  ############### test __getitem__, __setitem__ with multilple schedulings ###############
+  n_replicas = 8
+  schedule_dict = {
+      1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+          'dropout_rate': np.zeros((n_replicas,))},
+      200: {'learning_rate': np.linspace(0.01, 0.001, n_replicas), # starting at step 200
+            'dropout_rate': np.linspace(0, 0.5, n_replicas)}
+  }
+  hp = utils.ScheduledHyperParams(schedule_dict)
+
+  class Model:
+      pass
+
+  m = Model()
+  m.global_step = 1
+  hp.set_model(m)
+
+  for i in range(199):
+    random_pair = random.choice(list(range(0, n_replicas - 1)))
+    hpname = random.choice(['learning_rate', 'dropout_rate'])
+    tmp1 = hp[random_pair][hpname]
+    tmp2 = hp[random_pair + 1][hpname]
+
+    tmp = hp[random_pair][hpname]
+    hp[random_pair][hpname] = hp[random_pair + 1][hpname]
+    hp[random_pair + 1][hpname] = tmp
+
+    assert hp[random_pair][hpname] == tmp2
+    assert hp[random_pair + 1][hpname] == tmp1
+    m.global_step += 1
+
+
+  for i in range(1000):
+    random_pair = random.choice(list(range(0, n_replicas - 1)))
+    hpname = random.choice(['learning_rate', 'dropout_rate'])
+    tmp1 = hp[random_pair][hpname]
+    tmp2 = hp[random_pair + 1][hpname]
+
+    tmp = hp[random_pair][hpname]
+    hp[random_pair][hpname] = hp[random_pair + 1][hpname]
+    hp[random_pair + 1][hpname] = tmp
+
+    assert hp[random_pair][hpname] == tmp2
+    assert hp[random_pair + 1][hpname] == tmp1
+    m.global_step += 1

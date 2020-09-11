@@ -3,7 +3,6 @@ import os
 import copy
 import random
 import functools
-import collections
 import json
 
 import tensorflow as tf
@@ -67,11 +66,13 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
-    if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
+    if not any(isinstance(c, MonitorOptimalModelCallback) for c in callbacks):
       callbacks += [MonitorOptimalModelCallback()]
     # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
-      callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
+      callbacks += [
+          MetropolisExchangeCallback(exchange_data, swap_step, burn_in)
+      ]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
 
   callback_list = CallbackListWrapper(callbacks)
@@ -201,23 +202,25 @@ class CallbackListWrapper(cbks.CallbackList):
     if mode == ModeKeys.TRAIN:
       for callback in self.callbacks:
         if isinstance(callback, BaseExchangeCallback):
-          callback._safe_exchange()
+          callback._safe_exchange() # pylint: disable=protected-access
 
   def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
     if hook_name == 'begin':
       return self._on_epoch_begin(epoch, epoch_logs, mode=mode)
     elif hook_name == 'end':
       return self._on_epoch_end(epoch, epoch_logs, mode=mode)
+    else:
+      raise ValueError('wrong hook_name')
 
   def _on_epoch_begin(self, epoch, epoch_logs, mode=None):
-    if mode == ModeKeys.TRAIN: 
+    if mode == ModeKeys.TRAIN:
       super().on_epoch_begin(epoch, epoch_logs)
     if self.progbar is not None:
       self.progbar.on_epoch_begin(epoch, epoch_logs)
 
   def _on_epoch_end(self, epoch, epoch_logs, mode=None):
     # Epochs only apply to `fit`.
-    if mode == ModeKeys.TRAIN: 
+    if mode == ModeKeys.TRAIN:
       super().on_epoch_end(epoch, epoch_logs)
     if self.progbar is not None:
       self.progbar.on_epoch_end(epoch, epoch_logs)
@@ -235,7 +238,7 @@ class CallbackListWrapper(cbks.CallbackList):
           for callback in self.callbacks:
             if (isinstance(callback, BaseExchangeCallback)
                 and callback.should_exchange()):
-              callback._safe_exchange()
+              callback._safe_exchange() # pylint: disable=protected-access
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
@@ -254,7 +257,8 @@ class CallbackListWrapper(cbks.CallbackList):
     # through exchange callbacks themselfs.
     for callback in self.callbacks:
       if isinstance(callback, BaseExchangeCallback):
-        self.model.history.exchange_history = getattr(callback, 'exchange_logs', None)
+        self.model.history.exchange_history = getattr(
+            callback, 'exchange_logs', None)
         break
 
 class BaseExchangeCallback(tf.keras.callbacks.Callback):
@@ -420,8 +424,6 @@ class PBTExchangeCallback(BaseExchangeCallback):
     losses = kwargs.get('test_losses', None) or self.evaluate_exchange_losses()
     optimal_replica_id = np.argmin(losses)
 
-    optimal_weights = self.model.models[optimal_replica_id].trainable_variables
-
     # copy vars
     for rid in range(self.model.n_replicas):
       if rid != optimal_replica_id:
@@ -458,8 +460,6 @@ class PBTExchangeCallback(BaseExchangeCallback):
     Args:
       replica_id: The ID of replica that needs to be perturbed.
     """
-    weight_dist_fn = (self.weight_dist_fn
-                      or functools.partial(np.random.normal, 0, 0.1))
 
     sess = tf.compat.v1.keras.backend.get_session()
     model = self.model.models[replica_id]
@@ -480,7 +480,7 @@ class PBTExchangeCallback(BaseExchangeCallback):
     """Copies variables from `src_replica` to `dst_replica`."""
     hps = self.model.hpspace
     for hpname in hps.hpspace[0]:
-      hps.hpspace[dst_replica][hpname] = hps.hpspace[dst_replica][hpname]
+      hps.hpspace[dst_replica][hpname] = hps.hpspace[src_replica][hpname]
 
   def exchange(self, *args, **kwargs):
     self.exploit_and_explore(*args, **kwargs)
@@ -489,21 +489,42 @@ class PBTExchangeCallback(BaseExchangeCallback):
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
   def __init__(self, exchange_data, swap_step, burn_in=None):
-    super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
+    super(MetropolisExchangeCallback, self).__init__(
+        exchange_data, swap_step, burn_in)
 
-  def exchange(self, **kwargs):
+  def exchange(self, **kwargs): # pylint: disable=arguments-differ
     """Exchanges hyperparameters between adjacent replicas.
 
     This function is called once on the beginning of training to
     log initial values of hyperparameters and then it is called
     every `swap_step` steps.
+
+    Args:
+      hpname: (Optional) Hyperparameter name for exchange.
+      exchange_proba: (Optional) Probability of exchange.
+      coeff: (Optional) Exponential argument coefficient. Default to 1.
+      exchange_pair: An integer > 0, the pair between which the
+        hyperparameters will be exchanged.
     """
+    
+    recognized_kwargs = ('hpname',
+                         'exchange_proba',
+                         'coeff',
+                         'exchange_pair')
+    unrecognized_kwargs = [k for k in kwargs if k not in recognized_kwargs]
+    if unrecognized_kwargs:
+      raise ValueError('Unrecognized kwargs', unrecognized_kwargs)
+
+
     # pick random hyperparameter to exchange
     hp = self.ordered_hyperparams
     hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
     # pick random replica pair to exchange
     n_replicas = self.model.n_replicas
-    exchange_pair = kwargs.get('exchange_pair', np.random.randint(1, n_replicas))
+    exchange_pair = kwargs.get('exchange_pair',
+                               np.random.randint(1, n_replicas))
+    if exchange_pair <= 0:
+      raise ValueError("`exchange_pair` must be an integer > 0")
     coeff = kwargs.get('coeff', 1.)
     losses = self.evaluate_exchange_losses()
 
@@ -524,6 +545,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     # beta_i - beta_j is expected to be negative
     proba = min(np.exp(
         coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
+    proba = kwargs.get('exchange_proba', proba)
 
     if np.random.uniform() < proba:
       swaped = 1
@@ -555,7 +577,7 @@ class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
     self.path = path or training_utils.LOGS_PATH
     self.name = name or 'optimal_model.h5'
 
-  def on_epoch_end(self, epoch, logs):
+  def on_epoch_end(self, epoch, logs=None):
     # get metrics ordered by replica_id
     monitored_metrics = get_ordered_metrics(logs, self.monitor)
 
