@@ -173,7 +173,7 @@ class CallbackListWrapper(cbks.CallbackList):
   `tf.keras.callbacks.CallbackList`.
   """
   def __init__(self, *args, **kwargs):
-    super(CallbackListWrapper, self).__init__(*args, **kwargs)
+    super().__init__(*args, **kwargs)
     self.progbar = None
     self._train_progbar = None
 
@@ -192,6 +192,7 @@ class CallbackListWrapper(cbks.CallbackList):
       self.progbar.params['verbose'] = verbose
 
   def _call_begin_hook(self, mode):
+    """Helpers for setting up beginning of epoch."""
     super()._call_begin_hook(mode)
     if self.progbar is not None:
       self.progbar.on_train_begin()
@@ -205,6 +206,7 @@ class CallbackListWrapper(cbks.CallbackList):
           callback._safe_exchange() # pylint: disable=protected-access
 
   def _call_epoch_hook(self, mode, hook_name, epoch, epoch_logs):
+    """Helper for callbacks."""
     if hook_name == 'begin':
       return self._on_epoch_begin(epoch, epoch_logs, mode=mode)
     elif hook_name == 'end':
@@ -226,6 +228,7 @@ class CallbackListWrapper(cbks.CallbackList):
       self.progbar.on_epoch_end(epoch, epoch_logs)
 
   def _call_batch_hook(self, mode, hook_name, batch_index, batch_logs):
+    """Helper for on batch begin/end."""
     super()._call_batch_hook(mode, hook_name, batch_index, batch_logs)
     if self.progbar is not None:
       if hook_name == 'begin':
@@ -242,6 +245,7 @@ class CallbackListWrapper(cbks.CallbackList):
         self.progbar.on_batch_end(batch_index, batch_logs)
 
   def _call_end_hook(self, mode):
+    """Helper for epoch end."""
     # at the end of the testing iteration we set the progress
     # bar back to training one
     if mode == ModeKeys.TEST:
@@ -276,7 +280,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
       swap_step: A step at wich the exchange is performed.
       burn_in: As step before which the exchanges are not perfomed.
     """
-    super(BaseExchangeCallback, self).__init__()
+    super().__init__()
     self.exchange_data = exchange_data
     self.swap_step = swap_step
     self.burn_in = burn_in or 1
@@ -401,7 +405,7 @@ class PBTExchangeCallback(BaseExchangeCallback):
                            or functools.partial(np.random.normal, 0, 0.1))
     self.hyperparams_dist = hyperparams_dist
 
-    super(PBTExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
+    super().__init__(exchange_data, swap_step, burn_in)
 
   def exploit_and_explore(self, **kwargs):
     """Decides whether  the worker should abandon the current solution.
@@ -489,8 +493,7 @@ class PBTExchangeCallback(BaseExchangeCallback):
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
   def __init__(self, exchange_data, swap_step, burn_in=None):
-    super(MetropolisExchangeCallback, self).__init__(
-        exchange_data, swap_step, burn_in)
+    super().__init__(exchange_data, swap_step, burn_in)
 
   def exchange(self, **kwargs): # pylint: disable=arguments-differ
     """Exchanges hyperparameters between adjacent replicas.
@@ -506,7 +509,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       exchange_pair: An integer > 0, the pair between which the
         hyperparameters will be exchanged.
     """
-    
+
     recognized_kwargs = ('hpname',
                          'exchange_proba',
                          'coeff',
@@ -577,7 +580,8 @@ class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
     self.path = path or training_utils.LOGS_PATH
     self.name = name or 'optimal_model.h5'
 
-  def on_epoch_end(self, epoch, logs=None):
+  def on_epoch_end(self, epoch, logs=None): # pylint: disable=unused-argument
+    """Implements logic on epoch end."""
     # get metrics ordered by replica_id
     monitored_metrics = get_ordered_metrics(logs, self.monitor)
 
