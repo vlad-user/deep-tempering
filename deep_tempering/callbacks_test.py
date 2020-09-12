@@ -1,3 +1,4 @@
+# pylint: disable=all
 import random
 import copy
 
@@ -249,7 +250,7 @@ def test_all_exchange_callback():
                                                exchange_pair=3,
                                                exchange_proba=1)
 
-  # test that exchange has happened       
+  # test that exchange has happened
   assert model.hpspace.hpspace[3]['dropout_rate'] == prev_hpspace[2]['dropout_rate']
 
   get_first_exchange_callback()._safe_exchange(hpname='learning_rate',

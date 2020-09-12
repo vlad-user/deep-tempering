@@ -1,3 +1,4 @@
+# pylint: disable=all
 import pytest
 import copy
 
@@ -58,7 +59,7 @@ def test_hp_space_state():
   assert hpss.get_ordered_hparams('learning_rate') == expected_values
 
   # test that placeholders are correctly fed
-  feed_dict = hpss.prepare_feed_tensors_and_values() 
+  feed_dict = hpss.prepare_feed_tensors_and_values()
 
   lr_feed_dict = {k: v for k, v in feed_dict.items() if 'learning_rate' in k.name}
   lr_items = list(lr_feed_dict.items())
@@ -195,7 +196,7 @@ def test_metrics_and_losses():
   #   Keras' API.
   # 3. I compare final weights and history values of metrics and losses.
 
-  # test a number of times. 
+  # test a number of times.
   for _ in range(1):
 
     tf.compat.v1.keras.backend.clear_session()
