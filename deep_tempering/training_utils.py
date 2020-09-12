@@ -1,4 +1,7 @@
-"""Utils for training."""
+"""Utils for training.
+
+Similar logic to `tensorflow/python/keras/engine/training_utils.py`
+"""
 import os
 from collections import abc
 from collections import OrderedDict

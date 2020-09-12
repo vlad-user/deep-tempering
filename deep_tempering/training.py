@@ -1,6 +1,8 @@
+"""Represents training.
+
+Similar logic to `tensorflow/python/keras/engine/training.py`
+"""
 import itertools
-import inspect
-import copy
 from collections import abc
 from collections import OrderedDict
 
@@ -8,11 +10,9 @@ import tensorflow as tf
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
-import tqdm
 
 from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
-
 
 
 class EnsembleModel:
@@ -42,7 +42,7 @@ class EnsembleModel:
     # hyperparameters are known - at `model.fit()`.
     self._hp_state_space = None
 
-    # (maybe) should be protected  
+    # (maybe) should be protected
     self.inputs = None
     self.outputs = None
     self.global_step = 0
@@ -53,7 +53,7 @@ class EnsembleModel:
               n_replicas,
               metrics=None):
     """Configures the model for training.
-    
+
   Args:
     optimizer: String (name of optimizer) or optimizer instance. See
       `tf.keras.optimizers`.
@@ -127,7 +127,7 @@ class EnsembleModel:
           hp = training_utils.HyperParamState()
           train_attrs[i]['hp_state'] = hp
           # Each model has its own input placeholder, meaning that the
-          # feed values are fed `n_replica` times. 
+          # feed values are fed `n_replica` times.
           # TODO: Implement this by using the same input for each one
           # of the model. This could reduce overhead of copying to
           # GPUs. In particular, the behaviour of
@@ -137,8 +137,8 @@ class EnsembleModel:
         with tf.variable_scope('loss_%d' % i):
           outputs = model.outputs
           output_names = keras_train_utils.generic_output_names(outputs)
-          loss_functions = keras_train_utils.prepare_loss_functions(loss,
-                                                                    output_names)
+          loss_functions = keras_train_utils.prepare_loss_functions(
+              loss, output_names)
 
         # Set placeholders instead of actual values for each possible
         # hyperparameter of the optimizer. All float values in `_hyper`
@@ -146,11 +146,11 @@ class EnsembleModel:
         # if the value is not exchanged the default value is fed. No need
         # to take care of feeding values that are not being exchanged.
         opt = tf.keras.optimizers.get(optimizer_config)
-        for n, v in opt._hyper.items():
+        for n, v in opt._hyper.items(): # pylint: disable=protected-access
           if isinstance(v, float):
-            opt._set_hyper(n, hp.get_hparam(n, default_value=v))
+            opt._set_hyper(n, hp.get_hparam(n, default_value=v)) # pylint: disable=protected-access
 
-        # Each replica will have now its own metric class. 
+        # Each replica will have now its own metric class.
         # For example, if `tf.keras.metrics.Precision()`
         # is passed to metrics we will duplicate this class
         # `n_replica` times.
@@ -163,7 +163,7 @@ class EnsembleModel:
           if isinstance(m, str):
             m = m
           elif isinstance(m, tf.keras.metrics.Metric):
-            args_kwargs = training_utils._infer_init_args_kwargs(m)
+            args_kwargs = training_utils._infer_init_args_kwargs(m) # pylint: disable=protected-access
             _ = args_kwargs.pop('name', None)
             m = m.__class__(**args_kwargs)
           elif callable(m):
@@ -206,7 +206,7 @@ class EnsembleModel:
     """Returns a list of all keras' models."""
     return [self._train_attrs[i]['model'] for i in range(self.n_replicas)]
 
-  def predict_on_batch(self, x, y):
+  def predict_on_batch(self, x, y): # pylint: disable=unused-argument
     """Returns predictions for a single batch of samples.
 
     Args:
@@ -215,6 +215,7 @@ class EnsembleModel:
     Returns:
       A list of numpy array(s) of predictions for each replica.
     """
+    # TODO: Do we need `y` arg here?
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       hp_tensors_and_values = (
@@ -257,7 +258,7 @@ class EnsembleModel:
 
   def train_on_batch(self, x, y):
     """Runs a single gradient update on a single batch of data.
-    
+
     Args:
       x: Input data. It could be: - A Numpy array (or array-like), or a list
         of arrays (in case the model has multiple inputs).
@@ -299,7 +300,7 @@ class EnsembleModel:
     Returns:
       Not compiled keras model.
     """
-    # NOTE: If to remove this function the 
+    # NOTE: If to remove this function the
     # training_test.test_metrics_and_losses() must be modified.
 
     # decide optimal based on argmax or argmin of the metric
@@ -341,7 +342,8 @@ class EnsembleModel:
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
-    target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
+    target_tensor_shape = training_utils.infer_shape_from_numpy_array(
+        target_ary)
     target_tensor = training_utils.create_training_target(target_tensor_shape)
     self._target_tensor = target_tensor
 
@@ -362,15 +364,16 @@ class EnsembleModel:
         metrics_dict = OrderedDict()
         for (_, metric_wrapper), name in zip(per_output_metrics.items(),
                                              self._stateful_metrics_names):
-          metrics_dict[name] = metric_wrapper 
+          metrics_dict[name] = metric_wrapper
 
         self._train_attrs[i]['metrics_dict'] = metrics_dict
-        metrics_names = [p[0] for p in metrics_dict.items()]
+
         metrics_tensors = self._handle_metrics(model.outputs,
                                               [self._target_tensor],
                                               metrics_dict)
         self._train_attrs[i]['metrics_tensors_dict'] = OrderedDict(
-            [(n, t) for n, t in zip(self._stateful_metrics_names, metrics_tensors)])
+            [(n, t) for n, t in zip(self._stateful_metrics_names,
+                                    metrics_tensors)])
 
         # create losses
         y_pred = model.outputs[0]
@@ -411,21 +414,22 @@ class EnsembleModel:
         y: Target data. Like the input data `x`, Numpy
           array(s).
         hyper_params: One of the following:
-          * `dict` that maps replica ID's to hyperparameters values. For example:
+          * `dict` that maps replica ID's to hyperparameters values. For
+            example:
             ```python
             hyper_params = {
               'learning_rate': np.linspace(0.01, 0.001, n_replicas),
               'dropout_rate': np.linspace(0, 0.5, n_replicas)
             }
             ```
-          * `dt.ScheduledHyperParams` object (in case of hyperparameters being modified to
-            specific values during training):
+          * `dt.ScheduledHyperParams` object (in case of hyperparameters being
+            modified to specific values during training):
             ```python
             hyper_params = dt.SchuduledHyperParams({
-                1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1
+                1: {'learning_rate': np.ones((n_replicas, )) * 0.1, # starting at step 1 # pylint: disable=line-too-long
                     'dropout_rate': np.zeros((n_replicas,))
                 }
-                200: {'learning_rate': np.linspace(0.01, 0.001, n_replicas), # starting at step 200
+                200: {'learning_rate': np.linspace(0.01, 0.001, n_replicas), # starting at step 200 # pylint: disable=line-too-long
                       'dropout_rate': np.linspace(0, 0.5, n_replicas)
                 }
             })
@@ -613,7 +617,7 @@ class EnsembleModel:
         for i in range(len(outputs)):
           output = outputs[i] if outputs else None
           target = targets[i] if targets else None
-          output_mask = None # to be implemented
+          output_mask = None # TODO: to be implemented # pylint: disable=unused-variable
           metric_results.extend(
               self._handle_per_output_metrics(per_outputs_metrics,
                                               target, output))
@@ -649,15 +653,17 @@ class EnsembleModel:
     """Metrics/losses tensors for each replica."""
     try:
       # loss
-      result = [self._train_attrs[i][metric_name] for i in range(self.n_replicas)]
+      result = [
+          self._train_attrs[i][metric_name] for i in range(self.n_replicas)
+      ]
     except KeyError:
       try:
         result = [self._train_attrs[i]['metrics_tensors_dict'][metric_name]
                   for i in range(self.n_replicas)]
 
-      except KeyError:
-        raise ValueError("Tensor", metric_name, "doesn't exist")
-      except:
+      except KeyError as exc:
+        raise ValueError("Tensor", metric_name, "doesn't exist") from exc
+      except: # pylint: disable=try-except-raise
         raise
 
     return result
@@ -778,6 +784,7 @@ def model_iteration(model,
       burn_in=burn_in)
 
   callbacks.model.stop_training = False
+  # pylint: disable=protected-access
   callbacks._call_begin_hook(mode)
 
 
@@ -855,12 +862,16 @@ def model_iteration(model,
 
   callbacks._call_end_hook(mode)
   callbacks.on_train_end() # TODO: move this to CallbackListWrap
-
+  # pylint: enable=protected-access
   if mode == ModeKeys.TRAIN:
     return model.history
   return results
 
-def _print_train_info(num_samples_or_steps, val_samples_or_steps, replicas, increment):
+def _print_train_info(num_samples_or_steps,
+                      val_samples_or_steps,
+                      replicas,
+                      increment):
+  """Prints info at the beginning of training."""
   msg = 'Train on {0} {increment}'.format(
       num_samples_or_steps, increment=increment)
   if val_samples_or_steps:
@@ -885,7 +896,7 @@ def _stateful_metrics_names(metrics):
   for m in metrics:
     if m in ['accuracy', 'acc']:
       name = 'acc'
-        
+
     elif isinstance(m, tf.keras.metrics.Metric):
       name = m.name
     elif callable(m):
@@ -896,4 +907,3 @@ def _stateful_metrics_names(metrics):
     stateful_metrics.append(name)
 
   return stateful_metrics
-
