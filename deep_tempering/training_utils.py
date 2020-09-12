@@ -1,3 +1,4 @@
+"""Utils for training."""
 import os
 from collections import abc
 from collections import OrderedDict
@@ -6,16 +7,16 @@ import json
 
 import tensorflow as tf
 import numpy as np
-from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
-from sklearn.utils import shuffle as sklearn_shuffle
+
 
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
+
 class ScheduledHyperParams:
   """Scheduler for hyper-parameters.
-  
+
   Has `dict`-like interface.
 
   NOTE: Doesn't support deep copy.
@@ -51,7 +52,7 @@ class ScheduledHyperParams:
     self._model = model
 
   def get_current_scheduled_step(self):
-
+    """Returns starting step for which current hyperparams are valid."""
     scheduled_steps = sorted(list(self._scheduled_hparams))
     # if model is not set return dict with "lowest" key
     if self._model is None:
@@ -126,10 +127,25 @@ class ScheduledHyperParams:
 
 
 class HyperParamState:
+  """Represents the state of all hyperparams of the given replica."""
   def __init__(self, default_values=None):
     self._attrs = {}
     self.default_values = default_values
   def get_hparam(self, name, default_value=None):
+    """Returns placeholder that will be fed with hyperparameter.
+
+    Args:
+      name: A name that will be used to query the placeholder.
+      default_value: Default value for placeholder. In case the hyperparameter
+        won't be used for exchanges this value will be assigned to it by
+        by default.
+
+    Returns:
+      A placeholder that represents hyperparameter.
+
+    Raises:
+      ValueError: If placeholder with given `name` already exists.
+    """
     # during creation of the optimal model default value (such
     # as dropout etc) could be passed.
     if (isinstance(self.default_values, abc.Mapping)
@@ -148,7 +164,7 @@ class HyperParamState:
     self._attrs[name] = hp
     return hp
 
-  def _get_hparam(self, name):
+  def _get_hparam(self, name): # pylint: disable=inconsistent-return-statements
     if name in self._attrs:
       return self._attrs[name]
 
@@ -217,6 +233,7 @@ class HyperParamSpace:
     return hparams
 
   def prepare_feed_tensors_and_values(self, training=True):
+    """Helper that prepares to feed hyperparams in train/inference modes."""
     # TODO: replace `training` with ModeKeys instance check
 
     n_replicas = len(self.hpspace)
@@ -226,7 +243,7 @@ class HyperParamSpace:
         name: dict(self.get_ordered_hparams(name))
         for name in hpnames
     }
-
+    # pylint: disable=protected-access
     hpstates = {
         i: self.ensemble_model._train_attrs[i]['hp_state']
         for i in range(n_replicas)
@@ -243,7 +260,7 @@ class HyperParamSpace:
 
         assert placeholder is not None
         feed_dict[placeholder] = value
-
+    # pylint: enable=protected-access
     return feed_dict
 
 def call_metric_function(metric_fn,
@@ -264,7 +281,7 @@ def _infer_init_args_kwargs(cls_):
   args_dict = OrderedDict(
       [(k, v.default) for k, v in signature.parameters.items()])
   for arg in args_dict:
-    default_value = None if args_dict[arg] == inspect._empty else args_dict[arg]
+    default_value = None if args_dict[arg] == inspect._empty else args_dict[arg] # pylint: disable=protected-access
     extracted_value = None
     try:
       extracted_value = cls_.__dict__[arg]
@@ -299,7 +316,7 @@ class MetricsAggregator(keras_train_utils.Aggregator):
   """
 
   def __init__(self, n_replicas, num_samples=None, steps=None):
-    super(MetricsAggregator, self).__init__(
+    super().__init__(
         use_steps=False,
         num_samples=num_samples,
         steps=steps,
@@ -336,7 +353,7 @@ def prepare_data_iterables(x,
                            epochs=1,
                            shuffle=True,
                            random_state=0):
-  
+  """Prepares train, validation and exchange dataset iterators."""
   # during testing DataIterable is passed
   if isinstance(x, DataIterable):
     return x
@@ -348,7 +365,7 @@ def prepare_data_iterables(x,
   train_data, validation_data, exchange_data = (
       _train_validation_exchange_data((x, y), validation_data=validation_data,
           exchange_data=exchange_data, validation_split=validation_split,
-          exchange_split=exchange_split))
+          exchange_split=exchange_split, random_state=random_state))
 
   train_iterable = DataIterable(train_data[0], train_data[1],
                                 batch_size=batch_size, epochs=epochs,
@@ -360,21 +377,10 @@ def prepare_data_iterables(x,
   else:
     validation_iterable = None
 
-  # exchange data is passed as is
-
   return (train_iterable, validation_iterable, exchange_data)
 
-
-  # elif  0.0 < validation_split < 1:
-  #   x_train, x_test, y_train, y_test = train_test_split(x, y,
-  #       test_size=validation_split, random_state=random_state)
-  #   train_dataset = DataIterable(x_train, y_train, batch_size, epochs, shuffle)
-  #   test_dataset = DataIterable(x_test, y_test, batch_size, epochs, shuffle)
-  #   return [train_dataset, test_dataset]
-  # else:
-  #   raise ValueError('Cannot parition data.')
-
 def _validate_dataset_shapes(*args):
+  """Checks that shapes in args are compatible."""
   shapes = []
   for arg in args:
     if isinstance(arg, (list, tuple)):
@@ -383,7 +389,7 @@ def _validate_dataset_shapes(*args):
     else:
       shapes.append(arg.shape)
 
-  if len(set([s[0] for s in shapes])) != 1:
+  if len({s[0] for s in shapes}) != 1:
     raise ValueError('First dimension of inputs and targets must be equal')
 
 class DataIterable:
@@ -412,7 +418,8 @@ class DataIterable:
     return self.data['x'].shape[0]
 
 class _NumpyIterator:
-  def __init__(self, data_dict, batch_size, epochs, shuffle):
+  """Iterator over numpy data."""
+  def __init__(self, data_dict, batch_size, epochs, shuffle, random_state=0):
     self.data_dict = data_dict
     self.batch_size = batch_size or 128
     self.epochs = epochs
@@ -420,12 +427,14 @@ class _NumpyIterator:
     self.begin = 0
     self.end = min(self.batch_size, data_dict['x'].shape[0])
     self.epoch_num = 0
+    self.random_state = random_state
 
   def __next__(self):
 
     y = self.data_dict['y']
     if self.begin == 0 and self.shuffle and y is not None:
-      self.data_dict = arrays_datadict_shuffle(self.data_dict)
+      self.data_dict = arrays_datadict_shuffle(self.data_dict,
+                                               random_state=self.random_state)
       y = self.data_dict['y']
 
     x = self.data_dict['x']
@@ -450,6 +459,7 @@ class _NumpyIterator:
       return batch_x
 
 class _GraphModeIterator:
+  """Iterator over dataset in graph mode."""
   def __init__(self, next_elem):
     self.next_elem = next_elem
 
@@ -457,15 +467,22 @@ class _GraphModeIterator:
     try:
       sess = tf.compat.v1.keras.backend.get_session()
       evaled = sess.run(self.next_elem)
-    except tf.compat.v1.errors.OutOfRangeError:
-      raise StopIteration()
+    except tf.compat.v1.errors.OutOfRangeError as exc:
+      raise StopIteration() from exc
     return evaled['x'], evaled['y']
 
 class GraphModeDataIterable:
+  """Iterable over dataset in graph mode."""
   # TODO: Extend support for eager iteration
   # Implement Wrapper for other than numpy arrays data types.
 
-  def __init__(self, x, y, batch_size=32, epochs=1, shuffle=True, shuffle_buf_size=1024):
+  def __init__(self,
+               x,
+               y,
+               batch_size=32,
+               epochs=1,
+               shuffle=True,
+               shuffle_buf_size=1024):
 
     self.batch_size = min(batch_size or 128, y.shape[0])
     self.epochs = epochs
@@ -500,9 +517,10 @@ class GraphModeDataIterable:
   def __len__(self):
     return self.__len
 
-def arrays_datadict_shuffle(datadict):
+def arrays_datadict_shuffle(datadict, random_state=0):
   """Shuffles all values in `dict` in unison."""
   indices = np.arange(datadict['x'].shape[0])
+  np.random.seed(random_state)
   np.random.shuffle(indices)
 
   return {
@@ -515,8 +533,7 @@ def _train_validation_exchange_data(train_data,
                                     exchange_data=None,
                                     validation_split=0.0,
                                     exchange_split=0.0,
-                                    random_state=0,
-                                    verbose=0):
+                                    random_state=0):
   """Extracts exchange data.
   Extraction of the exchanges dataset is done in the following order:
 
@@ -533,11 +550,12 @@ def _train_validation_exchange_data(train_data,
   x_train, y_train = train_data
 
   # extract validation data
+  # pylint: disable=self-assigning-variable
   if validation_data is not None:
     validation_data = validation_data
   elif validation_split > 0.0:
     x_train, x_validation, y_train, y_validation = train_test_split(
-        x_train, y_train, random_state=0, test_size=validation_split)
+        x_train, y_train, random_state=random_state, test_size=validation_split)
     validation_data = (x_validation, y_validation)
 
   # extract exchange data
@@ -608,6 +626,3 @@ def load_optimal_model(model_builder, hyperparams=None, path=None):
   model = model_builder(hp)
   model.load_weights(model_weights_path)
   return model
-
-  
-
