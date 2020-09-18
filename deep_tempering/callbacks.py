@@ -67,7 +67,7 @@ def configure_callbacks(callbacks,
   # Add additional callbacks during training.
   if mode == ModeKeys.TRAIN:
     model.history = cbks.History()
-    if not any(isinstance(MonitorOptimalModelCallback, c) for c in callbacks):
+    if not any(isinstance(c, MonitorOptimalModelCallback) for c in callbacks):
       callbacks += [MonitorOptimalModelCallback()]
     # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
@@ -221,6 +221,7 @@ class CallbackListWrapper(cbks.CallbackList):
 
   def _call_batch_hook(self, mode, hook_name, batch_index, batch_logs):
     super()._call_batch_hook(mode, hook_name, batch_index, batch_logs)
+
     if self.progbar is not None:
       if hook_name == 'begin':
         self.progbar.on_batch_begin(batch_index, batch_logs)
@@ -228,6 +229,7 @@ class CallbackListWrapper(cbks.CallbackList):
         # increment global step during train mode
         if mode == ModeKeys.TRAIN:
           self.model.global_step += 1
+
           # attempt exchanges
           for callback in self.callbacks:
             if (isinstance(callback, BaseExchangeCallback)
@@ -475,7 +477,7 @@ class PBTExchangeCallback(BaseExchangeCallback):
     """Copies variables from `src_replica` to `dst_replica`."""
     hps = self.model.hpspace
     for hpname in hps.hpspace[0]:
-      hps.hpspace[dst_replica][hpname] = hps.hpspace[dst_replica][hpname]
+      hps.hpspace[dst_replica][hpname] = hps.hpspace[src_replica][hpname]
 
   def exchange(self, *args, **kwargs):
     self.exploit_and_explore(*args, **kwargs)

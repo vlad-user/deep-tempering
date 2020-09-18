@@ -172,7 +172,7 @@ class EnsembleModel:
     if not tf.executing_eagerly():
       feed_dict = {input_: x for input_ in self.inputs}
       hp_tensors_and_values = (
-          self._hp_state_space.prepare_feed_tensors_and_values(training=False))
+          self.hpspace.prepare_feed_tensors_and_values(training=False))
       feed_dict.update(hp_tensors_and_values)
       evaluated = self._run(self.outputs, feed_dict)
 
@@ -188,7 +188,7 @@ class EnsembleModel:
           self._target_tensor: y
       })
       hp_tensors_and_values = (
-          self._hp_state_space.prepare_feed_tensors_and_values(training=False))
+          self.hpspace.prepare_feed_tensors_and_values(training=False))
       feed_dict.update(hp_tensors_and_values)
 
       metric_tensors = self._get_metric_tensors('loss')
@@ -210,7 +210,7 @@ class EnsembleModel:
           self._target_tensor: y
       })
       hp_tensors_and_values = (
-          self._hp_state_space.prepare_feed_tensors_and_values(training=True))
+          self.hpspace.prepare_feed_tensors_and_values(training=True))
       feed_dict.update(hp_tensors_and_values)
 
       metric_tensors = self._get_metric_tensors('loss')
@@ -346,7 +346,8 @@ class EnsembleModel:
           burn_in=None):
     
     if self._hp_state_space is None:
-      self._hp_state_space = training_utils.HyperParamSpace(self, hyper_params)
+      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+          self, hyper_params)
 
     if len(y.shape) == 1:
       y = y[:, None]
@@ -554,7 +555,7 @@ class EnsembleModel:
 
   @property
   def hpspace(self):
-    return self._hp_state_space
+    return self._hp_state_space.get_current_hyperparams_space()
 
 
 def model_iteration(model,
