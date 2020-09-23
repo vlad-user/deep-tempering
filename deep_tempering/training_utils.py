@@ -41,6 +41,36 @@ class HyperParamState:
     if name in self._attrs:
       return self._attrs[name]
 
+class ScheduledHyperParamSpace:
+  def __init__(self, ensemble_model, hparams_dict):
+    self.ensemble_model = ensemble_model
+    if all(isinstance(s, str) for s in hparams_dict):
+      # not scheduled hyperparams, start scheduling at step 1
+      hparams_dict = {1: hparams_dict}
+
+    self.hparams_spaces = {
+        step: HyperParamSpace(ensemble_model, hparams_dict[step])
+        for step in hparams_dict
+    }
+
+  def get_current_hyperparams_space(self):
+    curr_step = self._get_current_scheduled_step()
+    return self.hparams_spaces[curr_step]
+
+  def _get_current_scheduled_step(self):
+    """Returns starting step for which current hyperparams are valid."""
+    scheduled_steps = sorted(list(self.hparams_spaces.keys()))
+    glob_step = getattr(
+        self.ensemble_model, 'global_step', min(scheduled_steps))
+    curr_step = scheduled_steps[0]
+
+    for i in range(1, len(scheduled_steps)):
+      if glob_step >= scheduled_steps[i]:
+        curr_step = scheduled_steps[i]
+
+    return curr_step
+
+
 class HyperParamSpace:
   """Represents the hyper-parameter state of all replicas.
 
@@ -59,9 +89,10 @@ class HyperParamSpace:
     # {0: {'learning_rate': 0.001, 'dropout_rate': 0.0},
     #  1: {'learning_rate': 0.0055000000000000005, 'dropout_rate': 0.3},
     #  2: {'learning_rate': 0.01, 'dropout_rate': 0.6}}
-    ```jjj
+    ```
     """
     self.ensemble_model = ensemble_model
+
     hparams_dict = dict((k, list(v)) for k, v in hparams_dict.items())
     n_replicas = len(hparams_dict[hparams_dict.__iter__().__next__()])
     self._hyperparameter_names = sorted(list(hparams_dict.keys()))

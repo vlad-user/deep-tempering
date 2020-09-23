@@ -20,7 +20,7 @@ def test_pbt_callback():
       'learning_rate': np.linspace(0.001, 0.01, n_replicas),
       'dropout_rate': np.linspace(0., 0.6, n_replicas)
   }
-  hpss = training_utils.HyperParamSpace(em, hparams_dict)
+  hpss = training_utils.ScheduledHyperParamSpace(em, hparams_dict)
   em._hp_state_space = hpss
   x = np.random.normal(0, 2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
@@ -64,7 +64,7 @@ def test_pbt_callback():
   # every replica should copy from replica 0
   sess = tf.keras.backend.get_session()
   rid0_weights = sess.run(em.models[0].trainable_variables)
-  rid0_hyperparams = hpss.hpspace[0]
+  rid0_hyperparams = hpss.get_current_hyperparams_space().hpspace[0]
   
   # copy weights and hyperparams from replica 0 to all other
   clb.exploit_and_explore(test_losses=test_losses)
@@ -74,7 +74,7 @@ def test_pbt_callback():
 
     for w1, w2 in zip(rid0_weights, weights):
       np.testing.assert_almost_equal(w1, w2)
-    hparams = hpss.hpspace[i + 1]
+    hparams = hpss.get_current_hyperparams_space().hpspace[i + 1]
     for hname in rid0_hyperparams:
       np.testing.assert_almost_equal(rid0_hyperparams[hname], hparams[hname])
 
@@ -160,7 +160,7 @@ def test_metropolis_callback():
         'dropout_rate': np.linspace(0.05, 0.6, n_replicas)
   }
 
-  hpspace = training_utils.HyperParamSpace(em, hparams_dict)
+  hpspace = training_utils.ScheduledHyperParamSpace(em, hparams_dict)
 
   x = np.random.normal(0, 0.2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
@@ -172,7 +172,7 @@ def test_metropolis_callback():
   hpname = 'dropout_rate'
 
   # expected state of hyperparams after calling `exchage()` function
-  expected = copy.deepcopy(hpspace.hpspace)
+  expected = copy.deepcopy(hpspace.get_current_hyperparams_space().hpspace)
   t = expected[8]['dropout_rate']
   expected[8]['dropout_rate'] = expected[9]['dropout_rate']
   expected[9]['dropout_rate'] = t
@@ -182,7 +182,7 @@ def test_metropolis_callback():
   # and exp((beta_i - beta_j) * (losses[i] - losses[j])) > 1
   exchange_pair = 9
   clb.exchange(hpname=hpname, exchange_pair=exchange_pair)
-  assert hpspace.hpspace == expected
+  assert hpspace.get_current_hyperparams_space().hpspace == expected
 
 def test_all_exchange_callback():
   # Add testing here when there are multiple exchange callbacks
@@ -212,7 +212,7 @@ def test_all_exchange_callback():
   samples = 6
   exchange_data = validation_data
   swap_step = 2
-  hpss = training_utils.HyperParamSpace(model, hp)
+  hpss = training_utils.ScheduledHyperParamSpace(model, hp)
   model._hp_state_space = hpss
   # values of losses that train_on_batch/test_on_batch
   # will return
