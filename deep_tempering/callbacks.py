@@ -31,7 +31,8 @@ def configure_callbacks(callbacks,
                         mode=ModeKeys.TRAIN,
                         exchange_data=None,
                         swap_step=None,
-                        burn_in=None):
+                        burn_in=None,
+                        **kwargs):
   """Configures callbacks for use in various training loops.
 
   It is just a reimplementation of `set_callback_parameters()`
@@ -71,7 +72,7 @@ def configure_callbacks(callbacks,
       callbacks += [MonitorOptimalModelCallback()]
     # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
-      callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in)]
+      callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in, **kwargs)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
 
   callback_list = CallbackListWrapper(callbacks)
@@ -91,7 +92,8 @@ def configure_callbacks(callbacks,
       verbose=verbose,
       mode=mode,
       swap_step=swap_step,
-      burn_in=burn_in)
+      burn_in=burn_in,
+  )
 
   callback_list.model.stop_training = False
   if verbose:
@@ -116,7 +118,8 @@ def set_callback_parameters(callback_list,
                             verbose=1,
                             mode=ModeKeys.TRAIN,
                             swap_step=None,
-                            burn_in=None):
+                            burn_in=None,
+                            ):
   """Sets callback parameters.
 
   Args:
@@ -211,6 +214,8 @@ class CallbackListWrapper(cbks.CallbackList):
       super().on_epoch_begin(epoch, epoch_logs)
     if self.progbar is not None:
       self.progbar.on_epoch_begin(epoch, epoch_logs)
+
+
 
   def _on_epoch_end(self, epoch, epoch_logs, mode=None):
     # Epochs only apply to `fit`.
@@ -485,8 +490,9 @@ class PBTExchangeCallback(BaseExchangeCallback):
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, exchange_data, swap_step, burn_in=None):
+  def __init__(self, exchange_data, swap_step, burn_in=None, **kwargs):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
+    self.coeff = kwargs.get('coeff', 1.)
 
   def exchange(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
@@ -501,7 +507,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     # pick random replica pair to exchange
     n_replicas = self.model.n_replicas
     exchange_pair = kwargs.get('exchange_pair', np.random.randint(1, n_replicas))
-    coeff = kwargs.get('coeff', 1.)
+
     losses = self.evaluate_exchange_losses()
 
     hyperparams = [h[1] for h in hp[hpname]]
@@ -520,7 +526,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
 
     # beta_i - beta_j is expected to be negative
     proba = min(np.exp(
-        coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
+        self.coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
 
     if np.random.uniform() < proba:
       swaped = 1
@@ -528,8 +534,13 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     else:
       swaped = 0
 
+    if getattr(self, 'exchange_logs', None):
+      accpt_ratio = (self.exchange_logs['swaped'].count(1) + swaped) / (len(self.exchange_logs['proba']) + 1)
+    else:
+      accpt_ratio = swaped
+
     super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
-                                 swaped=swaped)
+                                 swaped=swaped, accept_ratio=accpt_ratio)
 
 
 class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):

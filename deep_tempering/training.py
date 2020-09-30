@@ -152,6 +152,12 @@ class EnsembleModel:
         *[train_attrs[i]['model'].outputs for i in range(n_replicas)]))
     self._is_compiled = True
 
+  def summary(self, line_length=None, positions=None, print_fn=None):
+    if not self._is_compiled:
+      raise ValueError('Unable to get summary. The model hasn\'t been built yet.')
+    else:
+      self._train_attrs[0]['model'].summary(line_length=line_length, positions=positions, print_fn=print_fn)
+
 
   @property
   def metrics_names(self):
@@ -346,7 +352,8 @@ class EnsembleModel:
           verbose=1,
           callbacks=None,
           swap_step=None,
-          burn_in=None):
+          burn_in=None,
+          **kwargs):
     
     if self._hp_state_space is None:
       self._hp_state_space = training_utils.ScheduledHyperParamSpace(
@@ -373,7 +380,8 @@ class EnsembleModel:
                            shuffle=shuffle,
                            verbose=verbose,
                            burn_in=burn_in,
-                           swap_step=swap_step)
+                           swap_step=swap_step,
+                           **kwargs)
 
   def evaluate(self,
                x=None,
@@ -577,7 +585,8 @@ def model_iteration(model,
                     random_data_split_state=0,
                     mode=ModeKeys.TRAIN,
                     swap_step=None,
-                    burn_in=None):
+                    burn_in=None,
+                    **kwargs):
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
   Args:
     model: `EnsembleModel` instance.
@@ -666,7 +675,9 @@ def model_iteration(model,
       mode=mode,
       exchange_data=exchange_data,
       swap_step=swap_step,
-      burn_in=burn_in)
+      burn_in=burn_in,
+      **kwargs
+  )
 
   callbacks.model.stop_training = False
   callbacks._call_begin_hook(mode)
