@@ -100,8 +100,6 @@ def test_configure_callbacks():
       'steps_per_epoch': None,
       'samples': None,
       'verbose': 1,
-      'burn_in': None,
-      'swap_step': None
   }
   callbacklist = cbks.configure_callbacks([], model, **kwargs)
   kwargs.update({
@@ -127,7 +125,7 @@ def test_base_hp_exchange_callback():
   hpss = training_utils.HyperParamSpace(em, hparams_dict)
   x = np.random.normal(0, 2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
-  clb = cbks.BaseExchangeCallback((x, y), swap_step=10)
+  clb = cbks.BaseExchangeCallback((x, y), swap_step=10, burn_in=1)
   clb.model = em
 
   # test get_ordered_losses() and _metrics_sorting_key()
@@ -164,7 +162,7 @@ def test_metropolis_callback():
 
   x = np.random.normal(0, 0.2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
-  clb = cbks.MetropolisExchangeCallback((x, y), swap_step=10)
+  clb = cbks.MetropolisExchangeCallback((x, y), swap_step=10, hp_to_swap='dropout_rate')
   clb.model = em
   em._hp_state_space = hpspace
 
@@ -234,7 +232,7 @@ def test_all_exchange_callback():
                                             batch_size=batch_size,
                                             epochs=epochs,
                                             exchange_data=exchange_data,
-                                            swap_step=swap_step)
+                                            )
   # callbacks_list has instance of `BaseExchangeCallback`
   assert any(isinstance(c, cbks.BaseExchangeCallback)
              for c in callbacks_list.callbacks)

@@ -30,9 +30,7 @@ def configure_callbacks(callbacks,
                         verbose=1,
                         mode=ModeKeys.TRAIN,
                         exchange_data=None,
-                        swap_step=None,
-                        burn_in=None,
-                        **kwargs):
+                        ):
   """Configures callbacks for use in various training loops.
 
   It is just a reimplementation of `set_callback_parameters()`
@@ -72,7 +70,7 @@ def configure_callbacks(callbacks,
       callbacks += [MonitorOptimalModelCallback()]
     # add default exchange callback to the `callbacks_list` (if not there)
     if not any(isinstance(c, BaseExchangeCallback) for c in callbacks):
-      callbacks += [MetropolisExchangeCallback(exchange_data, swap_step, burn_in, **kwargs)]
+      callbacks += [MetropolisExchangeCallback(exchange_data)]
     callbacks = [cbks.BaseLogger()] + (callbacks or []) + [model.history]
 
   callback_list = CallbackListWrapper(callbacks)
@@ -91,8 +89,6 @@ def configure_callbacks(callbacks,
       samples=samples,
       verbose=verbose,
       mode=mode,
-      swap_step=swap_step,
-      burn_in=burn_in,
   )
 
   callback_list.model.stop_training = False
@@ -117,8 +113,6 @@ def set_callback_parameters(callback_list,
                             samples=None,
                             verbose=1,
                             mode=ModeKeys.TRAIN,
-                            swap_step=None,
-                            burn_in=None,
                             ):
   """Sets callback parameters.
 
@@ -154,8 +148,6 @@ def set_callback_parameters(callback_list,
       'verbose': verbose,
       'do_validation': do_validation,
       'metrics': callback_metrics,
-      'swap_step': swap_step,
-      'burn_in': burn_in
   }
   callback_list.set_params(callback_params)
 
@@ -265,7 +257,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
   You never use this class directly, but instead instantiate one of
   its subclasses such as `dt.callbacks.MetropolisExchangeCallback`.
   """
-  def __init__(self, exchange_data, swap_step, burn_in=None):
+  def __init__(self, exchange_data, swap_step, burn_in):
     """Initializes a new `BaseExchangeCallback` instance.
 
     Args:
@@ -277,7 +269,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     super(BaseExchangeCallback, self).__init__()
     self.exchange_data = exchange_data
     self.swap_step = swap_step
-    self.burn_in = burn_in or 1
+    self.burn_in = burn_in
 
   @property
   def exchangable(self):
@@ -490,9 +482,10 @@ class PBTExchangeCallback(BaseExchangeCallback):
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, exchange_data, swap_step, burn_in=None, **kwargs):
+  def __init__(self, exchange_data, swap_step=1, burn_in=1, coeff=1., hp_to_swap=None):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
-    self.coeff = kwargs.get('coeff', 1.)
+    self.coeff = coeff
+    self.hpname = hp_to_swap
 
   def exchange(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
@@ -503,7 +496,9 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     """
     # pick random hyperparameter to exchange
     hp = self.ordered_hyperparams
-    hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
+    hpname = kwargs.get('hpname', None)
+    if not hpname:
+      hpname = self.hpname if self.hpname else random.choice(list(hp.keys()))
     # pick random replica pair to exchange
     n_replicas = self.model.n_replicas
     exchange_pair = kwargs.get('exchange_pair', np.random.randint(1, n_replicas))
@@ -511,6 +506,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     losses = self.evaluate_exchange_losses()
 
     hyperparams = [h[1] for h in hp[hpname]]
+    replicas_ids = [h[0] for h in hp[hpname]]
 
     i = exchange_pair
     j = exchange_pair - 1
@@ -525,12 +521,12 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       beta_j = 1. / hyperparams[j]
 
     # beta_i - beta_j is expected to be negative
-    proba = min(np.exp(
-        self.coeff * (losses[i] - losses[j]) * (beta_i - beta_j)), 1.)
+    delta = self.coeff * (losses[i] - losses[j]) * (beta_i - beta_j)
+    proba = min(np.exp(delta), 1.)
 
     if np.random.uniform() < proba:
       swaped = 1
-      self.model.hpspace.swap_between(i, j, hpname)
+      self.model.hpspace.swap_between(replicas_ids[i], replicas_ids[j], hpname)
     else:
       swaped = 0
 
@@ -540,11 +536,11 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       accpt_ratio = swaped
 
     super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
-                                 swaped=swaped, accept_ratio=accpt_ratio)
+                                 swaped=swaped, accept_ratio=accpt_ratio, delta=delta, exchange_pair=[replicas_ids[i], replicas_ids[j]])
 
 
 class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
-  """Monitors optimal keras' model.
+  """Monitors optimal keras' model].
 
   At the end of each epoch stores the optimal keras model based on value
   we are metric value being monitored. This callback is added automatically

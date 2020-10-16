@@ -351,9 +351,7 @@ class EnsembleModel:
           validation_freq=1,
           verbose=1,
           callbacks=None,
-          swap_step=None,
-          burn_in=None,
-          **kwargs):
+          ):
     
     if self._hp_state_space is None:
       self._hp_state_space = training_utils.ScheduledHyperParamSpace(
@@ -379,9 +377,7 @@ class EnsembleModel:
                            callbacks=callbacks,
                            shuffle=shuffle,
                            verbose=verbose,
-                           burn_in=burn_in,
-                           swap_step=swap_step,
-                           **kwargs)
+                           )
 
   def evaluate(self,
                x=None,
@@ -584,9 +580,7 @@ def model_iteration(model,
                     validation_freq=1,
                     random_data_split_state=0,
                     mode=ModeKeys.TRAIN,
-                    swap_step=None,
-                    burn_in=None,
-                    **kwargs):
+                    ):
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
   Args:
     model: `EnsembleModel` instance.
@@ -674,9 +668,6 @@ def model_iteration(model,
       verbose=verbose,
       mode=mode,
       exchange_data=exchange_data,
-      swap_step=swap_step,
-      burn_in=burn_in,
-      **kwargs
   )
 
   callbacks.model.stop_training = False
