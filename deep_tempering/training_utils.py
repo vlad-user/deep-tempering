@@ -150,7 +150,7 @@ class HyperParamSpace:
     for i in range(n_replicas):
       for hpname in hpnames:
         if not training and 'dropout_rate' in hpname:
-          value = 1.
+          value = 0.
         else:
           value = current_hp_dict[hpname][i]
         placeholder = hpstates[i]._get_hparam(hpname)

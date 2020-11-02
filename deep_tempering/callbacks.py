@@ -482,10 +482,9 @@ class PBTExchangeCallback(BaseExchangeCallback):
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, exchange_data, swap_step=1, burn_in=1, coeff=1., hp_to_swap=None):
+  def __init__(self, exchange_data, swap_step=1, burn_in=1, coeff=1.):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
     self.coeff = coeff
-    self.hpname = hp_to_swap
 
   def exchange(self, **kwargs):
     """Exchanges hyperparameters between adjacent replicas.
@@ -496,9 +495,8 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
     """
     # pick random hyperparameter to exchange
     hp = self.ordered_hyperparams
-    hpname = kwargs.get('hpname', None)
-    if not hpname:
-      hpname = self.hpname if self.hpname else random.choice(list(hp.keys()))
+    hpname = kwargs.get('hpname', random.choice(list(hp.keys())))
+
     # pick random replica pair to exchange
     n_replicas = self.model.n_replicas
     exchange_pair = kwargs.get('exchange_pair', np.random.randint(1, n_replicas))
@@ -531,16 +529,22 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       swaped = 0
 
     if getattr(self, 'exchange_logs', None):
-      accpt_ratio = (self.exchange_logs['swaped'].count(1) + swaped) / (len(self.exchange_logs['proba']) + 1)
+      accpt_ratio = (self.exchange_logs['swaped'].count(1) + swaped) / \
+                    (len(self.exchange_logs['proba']) + 1)
     else:
       accpt_ratio = swaped
 
-    super().log_exchange_metrics(losses, proba=proba, hpname=hpname,
-                                 swaped=swaped, accept_ratio=accpt_ratio, delta=delta, exchange_pair=[replicas_ids[i], replicas_ids[j]])
+    super().log_exchange_metrics(losses,
+                                 proba=proba,
+                                 hpname=hpname,
+                                 swaped=swaped,
+                                 accept_ratio=accpt_ratio,
+                                 delta=delta,
+                                 exchange_pair=[replicas_ids[i], replicas_ids[j]])
 
 
 class MonitorOptimalModelCallback(tf.keras.callbacks.Callback):
-  """Monitors optimal keras' model].
+  """Monitors optimal keras' model.
 
   At the end of each epoch stores the optimal keras model based on value
   we are metric value being monitored. This callback is added automatically
