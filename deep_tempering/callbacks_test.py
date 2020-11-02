@@ -162,7 +162,7 @@ def test_metropolis_callback():
 
   x = np.random.normal(0, 0.2, (18, 2))
   y = np.random.randint(0, 2, (18, 1))
-  clb = cbks.MetropolisExchangeCallback((x, y), swap_step=10, hp_to_swap='dropout_rate')
+  clb = cbks.MetropolisExchangeCallback((x, y), swap_step=10)
   clb.model = em
   em._hp_state_space = hpspace
 
