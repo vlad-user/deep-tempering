@@ -529,8 +529,9 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       swaped = 0
 
     if getattr(self, 'exchange_logs', None):
-      swp = self.exchange_logs['swaped'].count(1) + swaped
-      accpt_ratio = swp / len(self.exchange_logs['proba']) + 1
+      n_attempts = len(self.exchange_logs['proba']) + 1
+      n_swaps = self.exchange_logs['swaped'].count(1) + swaped
+      accpt_ratio = n_swaps / n_attempts
     else:
       accpt_ratio = swaped
 
