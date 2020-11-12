@@ -723,6 +723,7 @@ def model_iteration(model,
         break
 
     aggregator.finalize()
+
     results = aggregator.results
     epoch_logs = cbks.make_logs(model, epoch_logs, results, mode)
     if len(results) == 1:
