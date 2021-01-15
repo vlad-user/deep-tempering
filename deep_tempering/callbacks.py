@@ -16,7 +16,7 @@ from deep_tempering import training_utils
 make_logs = cbks.make_logs
 
 def get_progbar(model):
-  """Get Progbar."""
+  """Gets progressbar."""
   stateful_metric_names = model.metrics_names[model.n_replicas:]
   return cbks.ProgbarLogger('samples', stateful_metric_names)
 
@@ -130,7 +130,8 @@ def set_callback_parameters(callback_list,
   """
   for cbk in callback_list:
     if isinstance(cbk, (cbks.BaseLogger, cbks.ProgbarLogger)):
-      cbk.stateful_metrics = model.metrics_names[model.n_replicas:]  # Exclude `loss`
+       # Excludes `loss`
+      cbk.stateful_metrics = model.metrics_names[model.n_replicas:]
 
   # Set callback parameters
   callback_metrics = []
@@ -207,8 +208,6 @@ class CallbackListWrapper(cbks.CallbackList):
     if self.progbar is not None:
       self.progbar.on_epoch_begin(epoch, epoch_logs)
 
-
-
   def _on_epoch_end(self, epoch, epoch_logs, mode=None):
     # Epochs only apply to `fit`.
     if mode == ModeKeys.TRAIN: 
@@ -243,9 +242,9 @@ class CallbackListWrapper(cbks.CallbackList):
     super()._call_end_hook(mode)
 
     # Attach exchange logs to the HistoryCallback.
-    # Assuming there only one Exchange callback.
+    # Assuming there is only one Exchange callback.
     # In case of multiple exchange callbacks they could be accessed
-    # through exchange callbacks themselfs.
+    # through exchange callbacks themselves.
     for callback in self.callbacks:
       if isinstance(callback, BaseExchangeCallback):
         self.model.history.exchange_history = getattr(callback, 'exchange_logs', None)
@@ -342,7 +341,6 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
 
     self.exchange(*args, **kwargs)
 
-
   @property
   def ordered_hyperparams(self):
     result = {}
@@ -436,7 +434,6 @@ class PBTExchangeCallback(BaseExchangeCallback):
 
   def copy_weights(self, src_replica, dst_replica):
     """Copies variables from `src_replica` to `dst_replica`."""
-    # print('copy_weights ---> src_replica:', src_replica, ', dst_replica:', dst_replica)
     src_model = self.model.models[src_replica]
     dst_model = self.model.models[dst_replica]
     src_vars = src_model.trainable_variables

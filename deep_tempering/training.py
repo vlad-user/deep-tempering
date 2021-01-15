@@ -10,11 +10,8 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 import tqdm
 
-
-
 from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
-
 
 
 class EnsembleModel:
@@ -52,12 +49,6 @@ class EnsembleModel:
 
     if any(arg is None for arg in (optimizer, loss, n_replicas)):
       raise ValueError('The arg is None')
-
-    # validate losses
-    # ...
-
-    # validate optimizer
-    # ...
 
     self.n_replicas = n_replicas
     metrics = metrics or []
@@ -153,6 +144,7 @@ class EnsembleModel:
     self._is_compiled = True
 
   def summary(self, line_length=None, positions=None, print_fn=None):
+    """Prints summary of a single replica."""
     if not self._is_compiled:
       raise ValueError('Unable to get summary. The model hasn\'t been built yet.')
     else:
@@ -161,6 +153,7 @@ class EnsembleModel:
 
   @property
   def metrics_names(self):
+    """Returns a list of all metrics names that model produces."""
     # losses
     names = ['loss_%d' %i for i in range(self.n_replicas)]
     # the rest of the metrics
@@ -508,7 +501,7 @@ class EnsembleModel:
         for i in range(len(outputs)):
           output = outputs[i] if outputs else None
           target = targets[i] if targets else None
-          output_mask = None # to be implemented
+          output_mask = None # TODO: to be implemented
           metric_results.extend(
               self._handle_per_output_metrics(per_outputs_metrics,
                                               target, output))
