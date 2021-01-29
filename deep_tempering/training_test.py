@@ -142,7 +142,7 @@ def test_model_iteration_without_exchanges():
   y_test = np.arange(5, 10).astype('float')
   hp = {
       'learning_rate': [0.01 , 0.02, 0.3],
-      'dropout_rate': [0.0, 0.1, 0.3]
+      'dropout_rate': [0.0001, 0.1, 0.3]
   }
 
   batch_size = 3
