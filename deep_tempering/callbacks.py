@@ -519,7 +519,7 @@ class MetropolisExchangeCallback(BaseExchangeCallback):
       beta_j = 1. / hyperparams[j]
 
     # beta_i - beta_j is expected to be negative
-    delta = self.coeff * (losses[i] - losses[j]) * (beta_i - beta_j)
+    delta = self.coeff * (losses[replicas_ids[i]] - losses[replicas_ids[j]]) * (beta_i - beta_j)
     proba = min(np.exp(delta), 1.)
 
     if np.random.uniform() < proba:
