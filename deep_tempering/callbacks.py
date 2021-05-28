@@ -323,7 +323,7 @@ class BaseExchangeCallback(tf.keras.callbacks.Callback):
     """Whether to exchange based on swap step and burn in period."""
     global_step = self.model.global_step
     return (self.exchangable
-            and global_step > self.burn_in
+            and global_step >= self.burn_in
             and self.swap_step is not None
             and (global_step - self.burn_in) % self.swap_step == 0)
 
