@@ -482,7 +482,7 @@ class PBTExchangeCallback(BaseExchangeCallback):
 
 class MetropolisExchangeCallback(BaseExchangeCallback):
   """Exchanges of hyperparameters based on Metropolis acceptance criteria."""
-  def __init__(self, exchange_data, swap_step=1, burn_in=1, coeff=1.):
+  def __init__(self, exchange_data, swap_step=None, burn_in=1, coeff=1.):
     super(MetropolisExchangeCallback, self).__init__(exchange_data, swap_step, burn_in)
     self.coeff = coeff
 
