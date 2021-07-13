@@ -352,7 +352,10 @@ class EnsembleModel:
           verbose=1,
           callbacks=None,
           ):
-    
+    # TODO: add docstrting with examples
+    # especially all possible variations of `hyper_params`
+    # argument + add explanations and clarification for different kind of errors
+    # that might arise when feeding incorrect arguments.
     if self._hp_state_space is None:
       self._hp_state_space = training_utils.ScheduledHyperParamSpace(
           self, hyper_params)
@@ -382,6 +385,7 @@ class EnsembleModel:
   def evaluate(self,
                x=None,
                y=None,
+               hyper_params=None,
                batch_size=None,
                verbose=1,
                callbacks=None):
@@ -428,6 +432,10 @@ class EnsembleModel:
     """
     if len(y.shape) == 1:
       y = y[:, None]
+    
+    if self._hp_state_space is None:
+      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+          self, hyper_params)
 
     if not self._built_losses_metrics_optimizer:
       self._build_losses_metrics_optimizer(y)
@@ -443,6 +451,7 @@ class EnsembleModel:
 
   def predict(self,
               x,
+              hyper_params=None,
               batch_size=None,
               verbose=0,
               callbacks=None):
@@ -476,6 +485,9 @@ class EnsembleModel:
             or in case a stateful model receives a number of samples
             that is not a multiple of the batch size.
     """
+    if self._hp_state_space is None:
+      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+          self, hyper_params)
     return model_iteration(self,
                            x,
                            targets=None,
