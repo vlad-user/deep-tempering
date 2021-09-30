@@ -14,6 +14,11 @@ from sklearn.utils import shuffle as sklearn_shuffle
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
 
+_IS_TRAINING_PLACEHOLDER = tf.compat.v1.placeholder_with_default(True, shape=())
+
+def get_training_phase_placeholder():
+  return _IS_TRAINING_PLACEHOLDER
+
 class HyperParamState:
   def __init__(self, default_values=None):
     self._attrs = {}
@@ -36,13 +41,6 @@ class HyperParamState:
                                                  name=name)
     self._attrs[name] = hp
     return hp
-
-  @property
-  def is_training_placeholder(self):
-    if getattr(self, 'is_training', None) is None:
-      self._is_training = tf.compat.v1.placeholder_with_default(True, shape=())
-
-    return self._is_training
 
   def _get_hparam(self, name):
     if name in self._attrs:
@@ -167,10 +165,7 @@ class HyperParamSpace:
         assert placeholder is not None
         feed_dict[placeholder] = value
 
-      if training:
-        feed_dict[hpstates[i].is_training_placeholder] = True
-      else:
-        feed_dict[hpstates[i].is_training_placeholder] = False
+    feed_dict[get_training_phase_placeholder()] = training
 
     return feed_dict
 
