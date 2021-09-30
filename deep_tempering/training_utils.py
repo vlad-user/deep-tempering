@@ -37,6 +37,13 @@ class HyperParamState:
     self._attrs[name] = hp
     return hp
 
+  @property
+  def is_training_placeholder(self):
+    if getattr(self, 'is_training', None) is None:
+      self._is_training = tf.compat.v1.placeholder_with_default(True, shape=())
+
+    return self._is_training
+
   def _get_hparam(self, name):
     if name in self._attrs:
       return self._attrs[name]
@@ -130,6 +137,8 @@ class HyperParamSpace:
     hparams.sort(key=lambda x: x[1])
     return hparams
 
+
+
   def prepare_feed_tensors_and_values(self, training=True):
     # TODO: replace `training` with ModeKeys instance check
 
@@ -157,6 +166,11 @@ class HyperParamSpace:
 
         assert placeholder is not None
         feed_dict[placeholder] = value
+
+      if training:
+        feed_dict[hpstates[i].is_training_placeholder] = True
+      else:
+        feed_dict[hpstates[i].is_training_placeholder] = False
 
     return feed_dict
 
