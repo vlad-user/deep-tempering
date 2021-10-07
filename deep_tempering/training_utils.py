@@ -108,6 +108,9 @@ class HyperParamSpace:
         for i in range(n_replicas)
     }
 
+  def set_hyperparams(self, value, hp_name, replica_id):
+    self.hpspace[replica_id][hp_name] = value
+
   @property
   def hyperparameters_names(self):
     return self._hyperparameter_names
