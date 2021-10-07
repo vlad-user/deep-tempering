@@ -14,7 +14,8 @@ from sklearn.utils import shuffle as sklearn_shuffle
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
 
-_IS_TRAINING_PLACEHOLDER = tf.compat.v1.placeholder_with_default(True, shape=())
+with tf.compat.v1.keras.backend.get_session().graph.as_default():
+  _IS_TRAINING_PLACEHOLDER = tf.compat.v1.placeholder_with_default(True, shape=())
 
 def get_training_phase_placeholder():
   return _IS_TRAINING_PLACEHOLDER
@@ -140,6 +141,8 @@ class HyperParamSpace:
   def prepare_feed_tensors_and_values(self, training=True):
     # TODO: replace `training` with ModeKeys instance check
 
+    assert training in {True, False}
+
     n_replicas = len(self.hpspace)
     hpnames = list(self.hpspace[0].keys())
 
@@ -260,9 +263,11 @@ def prepare_data_iterables(x,
                            shuffle=True,
                            random_state=0):
   
+
   # during testing DataIterable is passed
   if isinstance(x, DataIterable):
     return x
+
 
   # predict mode
   if y is None:
@@ -366,7 +371,6 @@ class _NumpyIterator:
 
     self.begin = self.end
     self.end += self.batch_size
-
     if y is not None:
       return batch_x, batch_y
     else:
