@@ -563,9 +563,8 @@ class EnsembleModel:
   def _get_train_ops(self):
     train_ops = []
     for i in range(self.n_replicas):
-      ops += [self._train_attrs[i]['train_op']]
-      ops += self._train_attrs[i]['update_ops']
-      train_ops.append(ops)
+        ops = [self._train_attrs[i]['train_op'], self._train_attrs[i]['update_ops']]
+        train_ops.append(ops)
     return list(itertools.chain(train_ops))
 
   @property
