@@ -564,11 +564,9 @@ class EnsembleModel:
     train_ops = []
     for i in range(self.n_replicas):
       ops += [self._train_attrs[i]['train_op']]
-      # for layer in self.models[i].layers:
-      #   model_update_ops += layer.updates
       ops += self._train_attrs[i]['update_ops']
-      train_ops.append(tf.group(ops))
-    return train_ops
+      train_ops.append(ops)
+    return list(itertools.chain(train_ops))
 
   @property
   def hpspace(self):
