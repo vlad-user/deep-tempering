@@ -336,6 +336,7 @@ class EnsembleModel:
           train_op = self._train_attrs[i]['optimizer'].get_updates(
                 loss, var_list)
         self._train_attrs[i]['train_op'] = train_op
+        self._train_attrs[i]['update_ops'] = list(itertools.chain([l.updates for l in model.layers]))
 
     self._built_losses_metrics_optimizer = True
 
@@ -560,13 +561,14 @@ class EnsembleModel:
     return result
 
   def _get_train_ops(self):
-    update_ops = []
+    train_ops = []
     for i in range(self.n_replicas):
-      model_update_ops = [self._train_attrs[i]['train_op']]
-      for layer in self.models[i].layers:
-        model_update_ops += layer.updates
-      update_ops.append(tf.group(model_update_ops))
-    return update_ops
+      ops += [self._train_attrs[i]['train_op']]
+      # for layer in self.models[i].layers:
+      #   model_update_ops += layer.updates
+      ops += self._train_attrs[i]['update_ops']
+      train_ops.append(tf.group(ops))
+    return train_ops
 
   @property
   def hpspace(self):
