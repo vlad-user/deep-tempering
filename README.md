@@ -14,10 +14,11 @@ import numpy as np
 import deep_tempering as dt
 
 def model_builder(hp):
+  is_training = dt.training_utils.get_training_phase_placeholder()
   inputs = tf.keras.layers.Input((2,))
   res = tf.keras.layers.Dense(2, activation=tf.nn.relu)(inputs)
   dropout_rate = hp.get_hparam('dropout_rate', default_value=0.0)
-  res = tf.keras.layers.Dropout(dropout_rate)(res)
+  res = tf.keras.layers.Dropout(dropout_rate)(res, training=is_training)
   res = tf.keras.layers.Dense(2, activation=tf.nn.softmax)(res)
   model = tf.keras.models.Model(inputs, res)
 
@@ -62,10 +63,11 @@ import deep_tempering as dt
 tf.compat.v1.keras.backend.clear_session()
 
 def model_builder(hp):
+  is_training = dt.training_utils.get_training_phase_placeholder()
   inputs = tf.keras.layers.Input((2,))
   res = tf.keras.layers.Dense(2, activation=tf.nn.relu)(inputs)
   dropout_rate = hp.get_hparam('dropout_rate', default_value=0.0)
-  res = tf.keras.layers.Dropout(dropout_rate)(res)
+  res = tf.keras.layers.Dropout(dropout_rate)(res, training=is_training)
   res = tf.keras.layers.Dense(2, activation=tf.nn.softmax)(res)
   model = tf.keras.models.Model(inputs, res)
 
@@ -94,9 +96,7 @@ history = model.fit(x,
                     hyper_params=hp,
                     batch_size=2,
                     epochs=15,
-                    swap_step=3,
-                    callbacks=[dt.callbacks.MetropolisExchangeCallback((x, y), 3, 5)],
-                    burn_in=0,
+                    callbacks=[dt.callbacks.MetropolisExchangeCallback((x, y), swap_step=3, burn_in=10)],
                     verbose=1)
 
 metrics_history = history.history
