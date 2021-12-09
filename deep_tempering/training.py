@@ -8,7 +8,6 @@ import tensorflow as tf
 from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
-import tqdm
 
 
 
@@ -86,71 +85,73 @@ class EnsembleModel:
     optimizer_config['config'].pop('name', None)
 
     train_attrs = {i: {} for i in range(self.n_replicas)}
-    for i in range(self.n_replicas):
-      with tf.device(training_utils.gpu_device_name(i)):
-        # build model and the state of hyperparameters
-        with tf.variable_scope('model_%d' % i):
-          hp = training_utils.HyperParamState()
-          train_attrs[i]['hp_state'] = hp
-          # Each model has its own input placeholder, meaning that the
-          # feed values are fed `n_replica` times. 
-          # TODO: Implement this by using the same input for each one
-          # of the model. This could reduce overhead of copying to
-          # GPUs. In particular, the behaviour of
-          # `prepare_input_output_tensors()` and values should be modified.
-          model = self._model_builder_fn(hp)
+    tf_graph = tf.keras.backend.get_session().graph
+    with tf_graph.as_default():
+      for i in range(self.n_replicas):
+        with tf.device(training_utils.gpu_device_name(i)):
+          # build model and the state of hyperparameters
+          with tf.variable_scope('model_%d' % i):
+            hp = training_utils.HyperParamState()
+            train_attrs[i]['hp_state'] = hp
+            # Each model has its own input placeholder, meaning that the
+            # feed values are fed `n_replica` times. 
+            # TODO: Implement this by using the same input for each one
+            # of the model. This could reduce overhead of copying to
+            # GPUs. In particular, the behaviour of
+            # `prepare_input_output_tensors()` and values should be modified.
+            model = self._model_builder_fn(hp)
 
-        with tf.variable_scope('loss_%d' % i):
-          outputs = model.outputs
-          output_names = keras_train_utils.generic_output_names(outputs)
-          loss_functions = keras_train_utils.prepare_loss_functions(loss,
-                                                                    output_names)
+          with tf.variable_scope('loss_%d' % i):
+            outputs = model.outputs
+            output_names = keras_train_utils.generic_output_names(outputs)
+            loss_functions = keras_train_utils.prepare_loss_functions(loss,
+                                                                      output_names)
 
-        # Set placeholders instead of actual values for each possible
-        # hyperparameterd of the optimizer. All float values in `_hyper`
-        # could be exchaned between different replicas. By default,
-        # if the value is not exchanged the default value is fed. No need
-        # to take care of feeding values that are not being exchanged.
-        opt = tf.keras.optimizers.get(optimizer_config)
-        for n, v in opt._hyper.items():
-          if isinstance(v, float):
-            opt._set_hyper(n, hp.get_hparam(n, default_value=v))
+          # Set placeholders instead of actual values for each possible
+          # hyperparameterd of the optimizer. All float values in `_hyper`
+          # could be exchaned between different replicas. By default,
+          # if the value is not exchanged the default value is fed. No need
+          # to take care of feeding values that are not being exchanged.
+          opt = tf.keras.optimizers.get(optimizer_config)
+          for n, v in opt._hyper.items():
+            if isinstance(v, float):
+              opt._set_hyper(n, hp.get_hparam(n, default_value=v))
 
-        # Each replica will have now its own metric class. 
-        # For example, if `tf.keras.metrics.Precision()`
-        # is passed to metrics we will duplicate this class
-        # `n_replica` times.
-        # TODO: right now if the initialized class is passed it is not
-        # used. A new class is created instead. This could be improved
-        # by using this class for the first replica. Same could be done
-        # of initialized optimizer.
-        compiled_metrics = []
-        for m in metrics:
-          if isinstance(m, str):
-            m = m
-          elif isinstance(m, tf.keras.metrics.Metric):
-            args_kwargs = training_utils._infer_init_args_kwargs(m)
-            _ = args_kwargs.pop('name', None)
-            m = m.__class__(**args_kwargs)
-          elif callable(m):
-            m = m
-          else:
-            raise ValueError('unexpected metric', m)
-          compiled_metrics.append(m)
+          # Each replica will have now its own metric class. 
+          # For example, if `tf.keras.metrics.Precision()`
+          # is passed to metrics we will duplicate this class
+          # `n_replica` times.
+          # TODO: right now if the initialized class is passed it is not
+          # used. A new class is created instead. This could be improved
+          # by using this class for the first replica. Same could be done
+          # of initialized optimizer.
+          compiled_metrics = []
+          for m in metrics:
+            if isinstance(m, str):
+              m = m
+            elif isinstance(m, tf.keras.metrics.Metric):
+              args_kwargs = training_utils._infer_init_args_kwargs(m)
+              _ = args_kwargs.pop('name', None)
+              m = m.__class__(**args_kwargs)
+            elif callable(m):
+              m = m
+            else:
+              raise ValueError('unexpected metric', m)
+            compiled_metrics.append(m)
 
-      train_attrs[i].update({
-          'model': model,
-          'loss_functions': loss_functions,
-          'optimizer': opt,
-          'compiled_metrics': compiled_metrics
-      })
+        train_attrs[i].update({
+            'model': model,
+            'loss_functions': loss_functions,
+            'optimizer': opt,
+            'compiled_metrics': compiled_metrics
+        })
 
-    self._train_attrs = train_attrs
-    self.inputs = list(itertools.chain(
-        *[train_attrs[i]['model'].inputs for i in range(n_replicas)]))
-    self.outputs = list(itertools.chain(
-        *[train_attrs[i]['model'].outputs for i in range(n_replicas)]))
-    self._is_compiled = True
+      self._train_attrs = train_attrs
+      self.inputs = list(itertools.chain(
+          *[train_attrs[i]['model'].inputs for i in range(n_replicas)]))
+      self.outputs = list(itertools.chain(
+          *[train_attrs[i]['model'].outputs for i in range(n_replicas)]))
+      self._is_compiled = True
 
   def summary(self, line_length=None, positions=None, print_fn=None):
     if not self._is_compiled:
@@ -291,49 +292,51 @@ class EnsembleModel:
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
-    target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
-    target_tensor = training_utils.create_training_target(target_tensor_shape)
-    self._target_tensor = target_tensor
+    tf_graph = tf.keras.backend.get_session().graph
+    with tf_graph.as_default():
+      target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
+      target_tensor = training_utils.create_training_target(target_tensor_shape)
+      self._target_tensor = target_tensor
 
-    # create losses and optimization step operation
-    for i in range(self.n_replicas):
-      with tf.device(training_utils.gpu_device_name(i)):
-        model = self._train_attrs[i]['model']
-        loss_functions = self._train_attrs[i]['loss_functions']
-        compiled_metrics = self._train_attrs[i]['compiled_metrics']
+      # create losses and optimization step operation
+      for i in range(self.n_replicas):
+        with tf.device(training_utils.gpu_device_name(i)):
+          model = self._train_attrs[i]['model']
+          loss_functions = self._train_attrs[i]['loss_functions']
+          compiled_metrics = self._train_attrs[i]['compiled_metrics']
 
-        # The target tensor is ready. Create metric tensors.
-        output_names = [o.name for o in model.outputs]
-        output_shapes = [o.shape for o in model.outputs]
-        per_output_metrics = keras_train_utils.collect_per_output_metric_info(
-            compiled_metrics, output_names, output_shapes,
-            loss_functions)[0]
+          # The target tensor is ready. Create metric tensors.
+          output_names = [o.name for o in model.outputs]
+          output_shapes = [o.shape for o in model.outputs]
+          per_output_metrics = keras_train_utils.collect_per_output_metric_info(
+              compiled_metrics, output_names, output_shapes,
+              loss_functions)[0]
 
-        metrics_dict = OrderedDict()
-        for (_, metric_wrapper), name in zip(per_output_metrics.items(),
-                                             self._stateful_metrics_names):
-          metrics_dict[name] = metric_wrapper 
+          metrics_dict = OrderedDict()
+          for (_, metric_wrapper), name in zip(per_output_metrics.items(),
+                                              self._stateful_metrics_names):
+            metrics_dict[name] = metric_wrapper 
 
-        self._train_attrs[i]['metrics_dict'] = metrics_dict
-        metrics_names = [p[0] for p in metrics_dict.items()]
-        metrics_tensors = self._handle_metrics(model.outputs,
-                                              [self._target_tensor],
-                                              metrics_dict)
-        self._train_attrs[i]['metrics_tensors_dict'] = OrderedDict(
-            [(n, t) for n, t in zip(self._stateful_metrics_names, metrics_tensors)])
+          self._train_attrs[i]['metrics_dict'] = metrics_dict
+          metrics_names = [p[0] for p in metrics_dict.items()]
+          metrics_tensors = self._handle_metrics(model.outputs,
+                                                [self._target_tensor],
+                                                metrics_dict)
+          self._train_attrs[i]['metrics_tensors_dict'] = OrderedDict(
+              [(n, t) for n, t in zip(self._stateful_metrics_names, metrics_tensors)])
 
-        # create losses
-        y_pred = model.outputs[0]
-        loss_function = loss_functions[0]
-        loss = loss_function(target_tensor, y_pred)
-        self._train_attrs[i]['loss'] = loss
+          # create losses
+          y_pred = model.outputs[0]
+          loss_function = loss_functions[0]
+          loss = loss_function(target_tensor, y_pred)
+          self._train_attrs[i]['loss'] = loss
 
-        # create optimization step op
-        var_list = model.trainable_variables
-        train_op = self._train_attrs[i]['optimizer'].get_updates(
-            loss, var_list)
-
+          # create optimization step op
+          var_list = model.trainable_variables
+          train_op = self._train_attrs[i]['optimizer'].get_updates(
+                loss, var_list)
         self._train_attrs[i]['train_op'] = train_op
+        self._train_attrs[i]['update_ops'] = list(itertools.chain([l.updates for l in model.layers]))
 
     self._built_losses_metrics_optimizer = True
 
@@ -570,7 +573,11 @@ class EnsembleModel:
     return result
 
   def _get_train_ops(self):
-    return [self._train_attrs[i]['train_op'] for i in range(self.n_replicas)]
+    train_ops = []
+    for i in range(self.n_replicas):
+        ops = [self._train_attrs[i]['train_op'], self._train_attrs[i]['update_ops']]
+        train_ops.append(ops)
+    return list(itertools.chain(train_ops))
 
   @property
   def hpspace(self):
