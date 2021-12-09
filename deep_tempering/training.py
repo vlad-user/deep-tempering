@@ -328,7 +328,7 @@ class EnsembleModel:
           # create losses
           y_pred = model.outputs[0]
           loss_function = loss_functions[0]
-          loss = loss_function(target_tensor, y_pred)
+          loss = loss_function(target_tensor, y_pred) + tf.math.reduce_sum(model.losses, axis=None)
           self._train_attrs[i]['loss'] = loss
 
           # create optimization step op
