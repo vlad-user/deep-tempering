@@ -1,15 +1,13 @@
 import itertools
-import inspect
-import copy
 from collections import abc
 from collections import OrderedDict
 
 import tensorflow as tf
-from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 
-from deep_tempering import training_utils, keras_training_utils
+from deep_tempering.training_utils import collect_per_output_metric_info, gpu_device_name, prepare_loss_functions, _infer_init_args_kwargs, create_training_target,  infer_shape_from_numpy_array, prepare_data_iterables, call_metric_function, should_run_validation, generic_output_names
+from deep_tempering.training_utils import OutputsAggregator, MetricsAggregator, HyperParamState, ScheduledHyperParamSpace, DataIterable
 
 from deep_tempering import callbacks as cbks
 
@@ -86,10 +84,10 @@ class EnsembleModel:
     tf_graph = tf.compat.v1.keras.backend.get_session().graph
     with tf_graph.as_default():
       for i in range(self.n_replicas):
-        with tf.device(training_utils.gpu_device_name(i)):
+        with tf.device(gpu_device_name(i)):
           # build model and the state of hyperparameters
           with tf.compat.v1.variable_scope('model_%d' % i):
-            hp = training_utils.HyperParamState()
+            hp = HyperParamState()
             train_attrs[i]['hp_state'] = hp
             # Each model has its own input placeholder, meaning that the
             # feed values are fed `n_replica` times. 
@@ -101,8 +99,8 @@ class EnsembleModel:
 
           with tf.compat.v1.variable_scope('loss_%d' % i):
             outputs = model.outputs
-            output_names = keras_training_utils.generic_output_names(outputs)
-            loss_functions = keras_training_utils.prepare_loss_functions(loss,
+            output_names = generic_output_names(outputs)
+            loss_functions = prepare_loss_functions(loss,
                                                                       output_names)
 
           # Set placeholders instead of actual values for each possible
@@ -128,7 +126,7 @@ class EnsembleModel:
             if isinstance(m, str):
               m = m
             elif isinstance(m, tf.keras.metrics.Metric):
-              args_kwargs = training_utils._infer_init_args_kwargs(m)
+              args_kwargs = _infer_init_args_kwargs(m)
               _ = args_kwargs.pop('name', None)
               m = m.__class__(**args_kwargs)
             elif callable(m):
@@ -292,13 +290,13 @@ class EnsembleModel:
     # A single tensor is fed to all ensemble losses.
     tf_graph = tf.compat.v1.keras.backend.get_session().graph
     with tf_graph.as_default():
-      target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
-      target_tensor = training_utils.create_training_target(target_tensor_shape)
+      target_tensor_shape = infer_shape_from_numpy_array(target_ary)
+      target_tensor = create_training_target(target_tensor_shape)
       self._target_tensor = target_tensor
 
       # create losses and optimization step operation
       for i in range(self.n_replicas):
-        with tf.device(training_utils.gpu_device_name(i)):
+        with tf.device(gpu_device_name(i)):
           model = self._train_attrs[i]['model']
           loss_functions = self._train_attrs[i]['loss_functions']
           compiled_metrics = self._train_attrs[i]['compiled_metrics']
@@ -306,7 +304,7 @@ class EnsembleModel:
           # The target tensor is ready. Create metric tensors.
           output_names = [o.name for o in model.outputs]
           output_shapes = [o.shape for o in model.outputs]
-          per_output_metrics = keras_training_utils.collect_per_output_metric_info(
+          per_output_metrics = collect_per_output_metric_info(
               compiled_metrics, output_names, output_shapes,
               loss_functions)[0]
 
@@ -358,7 +356,7 @@ class EnsembleModel:
     # argument + add explanations and clarification for different kind of errors
     # that might arise when feeding incorrect arguments.
     if self._hp_state_space is None:
-      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+      self._hp_state_space = ScheduledHyperParamSpace(
           self, hyper_params)
 
     if len(y.shape) == 1:
@@ -435,7 +433,7 @@ class EnsembleModel:
       y = y[:, None]
     
     if self._hp_state_space is None:
-      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+      self._hp_state_space = ScheduledHyperParamSpace(
           self, hyper_params)
 
     if not self._built_losses_metrics_optimizer:
@@ -487,7 +485,7 @@ class EnsembleModel:
             that is not a multiple of the batch size.
     """
     if self._hp_state_space is None:
-      self._hp_state_space = training_utils.ScheduledHyperParamSpace(
+      self._hp_state_space = ScheduledHyperParamSpace(
           self, hyper_params)
     return model_iteration(self,
                            x,
@@ -547,7 +545,7 @@ class EnsembleModel:
     metric_results = []
     for metric_name, metric_fn in metrics_dict.items():
       with tf.name_scope(metric_name):
-        metric_result = training_utils.call_metric_function(
+        metric_result = call_metric_function(
             metric_fn, y_true, y_pred, weights=None, mask=None)
         metric_results.append(metric_result)
     return metric_results
@@ -632,7 +630,7 @@ def model_iteration(model,
   Raises:
     ValueError: in case of invalid arguments.
   """
-  datasets = training_utils.prepare_data_iterables(
+  datasets = prepare_data_iterables(
       inputs, targets, validation_split=validation_split,
       validation_data=validation_data, exchange_data=exchange_data,
       batch_size=batch_size, shuffle=shuffle, exchange_split=exchange_split,
@@ -640,11 +638,11 @@ def model_iteration(model,
 
   val_samples_or_steps = None
   exchange_data = None
-  if (isinstance(datasets, training_utils.DataIterable) or
+  if (isinstance(datasets, DataIterable) or
       len(datasets) == 3 and datasets[1] is None):
     # TEST, PREDICT modes or TRAIN mode without validation data
     do_validation = False
-    if isinstance(datasets, training_utils.DataIterable):
+    if isinstance(datasets, DataIterable):
       train_dataset = datasets
     else:
       train_dataset = datasets[0]
@@ -660,11 +658,11 @@ def model_iteration(model,
   f = _make_execution_function(model, mode) #whether to train, test or predict
 
   if mode == ModeKeys.PREDICT:
-    aggregator = keras_training_utils.OutputsAggregator(
+    aggregator = OutputsAggregator(
         use_steps=False,
         num_samples=num_samples_or_steps)
   else:
-    aggregator = training_utils.MetricsAggregator(
+    aggregator = MetricsAggregator(
         n_replicas=model.n_replicas,
         num_samples=len(train_dataset))
 
@@ -747,7 +745,7 @@ def model_iteration(model,
       results = results[0]
 
     if (do_validation and
-        keras_training_utils.should_run_validation(validation_freq, epochs)):
+        should_run_validation(validation_freq, epochs)):
       val_results = model_iteration(
           model,
           test_dataset,
