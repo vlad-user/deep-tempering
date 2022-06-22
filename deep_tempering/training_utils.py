@@ -11,6 +11,9 @@ from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle as sklearn_shuffle
 
+from deep_tempering import keras_training_utils
+
+
 LOGS_PATH = os.path.join(os.getcwd(), '.deep_tempering_logs')
 
 
@@ -32,7 +35,7 @@ class HyperParamState:
       return self.default_values[name]
 
     if name in self._attrs:
-      raise ValueError('Hyper Params with name ', hp_name, 'already exists.')
+      raise ValueError('Hyper Params with name ', name, 'already exists.')
 
     if default_value is None:
       hp = tf.compat.v1.placeholder(tf.float32, shape=(), name=name)
@@ -181,7 +184,7 @@ def call_metric_function(metric_fn,
                          y_pred=None,
                          weights=None,
                          mask=None):
-  return keras_train_utils.call_metric_function(metric_fn,
+  return keras_training_utils.call_metric_function(metric_fn,
                                                 y_true,
                                                 y_pred,
                                                 weights,
@@ -219,7 +222,7 @@ def create_training_target(shape, dtype=None):
 
   return tf.keras.layers.Input(shape, dtype=dtype)
 
-class MetricsAggregator(keras_train_utils.Aggregator):
+class MetricsAggregator(keras_training_utils.Aggregator):
   """Aggregator that calculates loss and metrics info.
   Attributes:
     use_steps: Whether the loop is using `step` or `batch_size`.

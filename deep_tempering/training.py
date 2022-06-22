@@ -9,11 +9,9 @@ from tensorflow.python.keras.engine import training_utils as keras_train_utils
 from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import numpy as np
 
+from deep_tempering import training_utils, keras_training_utils
 
-
-from deep_tempering import training_utils
 from deep_tempering import callbacks as cbks
-
 
 
 class EnsembleModel:
@@ -85,12 +83,12 @@ class EnsembleModel:
     optimizer_config['config'].pop('name', None)
 
     train_attrs = {i: {} for i in range(self.n_replicas)}
-    tf_graph = tf.keras.backend.get_session().graph
+    tf_graph = tf.compat.v1.keras.backend.get_session().graph
     with tf_graph.as_default():
       for i in range(self.n_replicas):
         with tf.device(training_utils.gpu_device_name(i)):
           # build model and the state of hyperparameters
-          with tf.variable_scope('model_%d' % i):
+          with tf.compat.v1.variable_scope('model_%d' % i):
             hp = training_utils.HyperParamState()
             train_attrs[i]['hp_state'] = hp
             # Each model has its own input placeholder, meaning that the
@@ -101,10 +99,10 @@ class EnsembleModel:
             # `prepare_input_output_tensors()` and values should be modified.
             model = self._model_builder_fn(hp)
 
-          with tf.variable_scope('loss_%d' % i):
+          with tf.compat.v1.variable_scope('loss_%d' % i):
             outputs = model.outputs
-            output_names = keras_train_utils.generic_output_names(outputs)
-            loss_functions = keras_train_utils.prepare_loss_functions(loss,
+            output_names = keras_training_utils.generic_output_names(outputs)
+            loss_functions = keras_training_utils.prepare_loss_functions(loss,
                                                                       output_names)
 
           # Set placeholders instead of actual values for each possible
@@ -292,7 +290,7 @@ class EnsembleModel:
 
     # Create tensors for true labels.
     # A single tensor is fed to all ensemble losses.
-    tf_graph = tf.keras.backend.get_session().graph
+    tf_graph = tf.compat.v1.keras.backend.get_session().graph
     with tf_graph.as_default():
       target_tensor_shape = training_utils.infer_shape_from_numpy_array(target_ary)
       target_tensor = training_utils.create_training_target(target_tensor_shape)
@@ -308,7 +306,7 @@ class EnsembleModel:
           # The target tensor is ready. Create metric tensors.
           output_names = [o.name for o in model.outputs]
           output_shapes = [o.shape for o in model.outputs]
-          per_output_metrics = keras_train_utils.collect_per_output_metric_info(
+          per_output_metrics = keras_training_utils.collect_per_output_metric_info(
               compiled_metrics, output_names, output_shapes,
               loss_functions)[0]
 
@@ -320,7 +318,7 @@ class EnsembleModel:
           self._train_attrs[i]['metrics_dict'] = metrics_dict
           metrics_names = [p[0] for p in metrics_dict.items()]
           metrics_tensors = self._handle_metrics(model.outputs,
-                                                [self._target_tensor],
+                                               [self._target_tensor],
                                                 metrics_dict)
           self._train_attrs[i]['metrics_tensors_dict'] = OrderedDict(
               [(n, t) for n, t in zip(self._stateful_metrics_names, metrics_tensors)])
@@ -662,7 +660,7 @@ def model_iteration(model,
   f = _make_execution_function(model, mode) #whether to train, test or predict
 
   if mode == ModeKeys.PREDICT:
-    aggregator = keras_train_utils.OutputsAggregator(
+    aggregator = keras_training_utils.OutputsAggregator(
         use_steps=False,
         num_samples=num_samples_or_steps)
   else:
@@ -749,7 +747,7 @@ def model_iteration(model,
       results = results[0]
 
     if (do_validation and
-        keras_train_utils.should_run_validation(validation_freq, epochs)):
+        keras_training_utils.should_run_validation(validation_freq, epochs)):
       val_results = model_iteration(
           model,
           test_dataset,
